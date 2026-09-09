@@ -1,9 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import NoteEditor from '$lib/components/NoteEditor.svelte';
   import NoteList from '$lib/components/NoteList.svelte';
   import SearchBar from '$lib/components/SearchBar.svelte';
   import CategoryDialog from '$lib/components/CategoryDialog.svelte';
+  import ContactDialog from '$lib/components/ContactDialog.svelte';
+  import CoworkerDialog from '$lib/components/CoworkerDialog.svelte';
   import {
     notes,
     selectedNoteId,
@@ -23,6 +26,14 @@
   let showSettings = $state(false);
   let showSidebar = $state(true);
   let showCategoryDialog = $state(false);
+  let showContactDialog = $state(false);
+  let showCoworkerDialog = $state(false);
+
+  // Hotkey settings
+  let openHotkey = $state('Ctrl+Shift+M');
+  let saveCloseHotkey = $state('Ctrl+Shift+N');
+  let hotkeyError = $state('');
+  let hotkeySaved = $state('');
 
   function newNoteAndFocus() {
     editor?.newNote();
@@ -51,14 +62,37 @@
     });
   }
 
+  // Save and close handler (triggered by global hotkey)
+  async function handleSaveAndClose() {
+    await editor?.saveNow();
+    try {
+      await api.hideWidget();
+    } catch (e) {
+      console.error('Failed to hide widget:', e);
+    }
+  }
+
+  let unlistenSaveClose: UnlistenFn | null = null;
+
   onMount(async () => {
     window.addEventListener('select-search-result', handleSearchResult);
+    // Listen for save-and-close event from backend (global hotkey)
+    unlistenSaveClose = await listen('save-and-close', handleSaveAndClose);
+    // Load hotkey config
+    try {
+      const config = await api.getHotkeys();
+      openHotkey = config.open;
+      saveCloseHotkey = config.saveClose;
+    } catch (e) {
+      console.error('Failed to load hotkeys:', e);
+    }
     await refreshAll();
     newNoteAndFocus();
   });
 
   onDestroy(() => {
     window.removeEventListener('select-search-result', handleSearchResult);
+    unlistenSaveClose?.();
   });
 
   function toggleTagFilter(tagName: string) {
@@ -100,6 +134,28 @@
     }
   }
 
+  async function saveOpenHotkey() {
+    hotkeyError = '';
+    try {
+      await api.setOpenHotkey(openHotkey);
+      hotkeySaved = 'Open hotkey saved';
+      setTimeout(() => (hotkeySaved = ''), 1500);
+    } catch (e: any) {
+      hotkeyError = e?.message ?? String(e);
+    }
+  }
+
+  async function saveSaveCloseHotkey() {
+    hotkeyError = '';
+    try {
+      await api.setSaveCloseHotkey(saveCloseHotkey);
+      hotkeySaved = 'Save&close hotkey saved';
+      setTimeout(() => (hotkeySaved = ''), 1500);
+    } catch (e: any) {
+      hotkeyError = e?.message ?? String(e);
+    }
+  }
+
   let hasFilters = $derived($activeTagFilter !== null || $activeCategoryFilter !== null);
 </script>
 
@@ -122,8 +178,14 @@
     <button onclick={() => (showSidebar = !showSidebar)} class="text-fg-muted hover:text-fg text-xs px-1" title="Toggle sidebar">
       ☰
     </button>
-    <button onclick={() => (showCategoryDialog = true)} class="text-fg-muted hover:text-fg text-xs px-1" title="New category">
+    <button onclick={() => (showCategoryDialog = true)} class="text-fg-muted hover:text-fg text-xs px-1" title="Manage categories">
       📁
+    </button>
+    <button onclick={() => (showContactDialog = true)} class="text-fg-muted hover:text-fg text-xs px-1" title="Manage contacts">
+      �
+    </button>
+    <button onclick={() => (showCoworkerDialog = true)} class="text-fg-muted hover:text-fg text-xs px-1" title="Manage coworkers">
+      🤝
     </button>
     <button onclick={() => (showSettings = !showSettings)} class="text-fg-muted hover:text-fg text-xs px-1" title="Settings">
       ⚙
@@ -143,9 +205,10 @@
   {/if}
 
   {#if showSettings}
-    <div class="flex flex-col gap-2 px-3 py-2 border-b border-border bg-bg-subtle text-xs">
+    <div class="flex flex-col gap-2 px-3 py-2 border-b border-border bg-bg-subtle text-xs max-h-72 overflow-y-auto">
+      <!-- Theme -->
       <label class="flex items-center gap-2">
-        <span class="text-fg-muted">Theme</span>
+        <span class="text-fg-muted w-28">Theme</span>
         <select
           value={$settings.theme}
           onchange={(e) => settings.update((s) => ({ ...s, theme: (e.target as HTMLSelectElement).value as any }))}
@@ -156,6 +219,8 @@
           <option value="dark">Dark</option>
         </select>
       </label>
+
+      <!-- Hide on blur -->
       <label class="flex items-center gap-2">
         <input
           type="checkbox"
@@ -165,13 +230,59 @@
         />
         <span class="text-fg-muted">Hide widget when clicking outside</span>
       </label>
+
+      <!-- Divider -->
+      <div class="border-t border-border my-1"></div>
+
+      <!-- Hotkeys -->
+      <div class="text-fg-muted font-medium mb-1">Keyboard Shortcuts</div>
+
       <div class="flex items-center gap-2">
-        <span class="text-fg-muted">Outlook:</span>
+        <span class="text-fg-muted w-28">Open / toggle</span>
+        <input
+          bind:value={openHotkey}
+          placeholder="e.g. Ctrl+Shift+M"
+          class="flex-1 bg-bg-muted rounded px-2 py-1 border border-border outline-none font-mono text-[11px]"
+        />
+        <button onclick={saveOpenHotkey} class="px-2 py-1 rounded bg-accent text-accent-fg hover:opacity-90">
+          Apply
+        </button>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <span class="text-fg-muted w-28">Save & close</span>
+        <input
+          bind:value={saveCloseHotkey}
+          placeholder="e.g. Ctrl+Shift+N"
+          class="flex-1 bg-bg-muted rounded px-2 py-1 border border-border outline-none font-mono text-[11px]"
+        />
+        <button onclick={saveSaveCloseHotkey} class="px-2 py-1 rounded bg-accent text-accent-fg hover:opacity-90">
+          Apply
+        </button>
+      </div>
+
+      <div class="text-[10px] text-fg-muted pl-28">
+        Format: Ctrl+Shift+Key, Alt+Key, etc. Changes apply immediately.
+      </div>
+
+      {#if hotkeyError}
+        <div class="text-[10px] text-red-500 pl-28">{hotkeyError}</div>
+      {/if}
+      {#if hotkeySaved}
+        <div class="text-[10px] text-green-500 pl-28">{hotkeySaved}</div>
+      {/if}
+
+      <!-- Divider -->
+      <div class="border-t border-border my-1"></div>
+
+      <!-- Outlook -->
+      <div class="flex items-center gap-2">
+        <span class="text-fg-muted w-28">Outlook</span>
         {#if $settings.graphSignedIn}
-          <button onclick={signOutGraph} class="text-xs px-2 py-1 rounded bg-bg-muted hover:bg-border">Sign out</button>
+          <button onclick={signOutGraph} class="px-2 py-1 rounded bg-bg-muted hover:bg-border">Sign out</button>
           <span class="text-green-500">✓ Connected</span>
         {:else}
-          <button onclick={signInGraph} class="text-xs px-2 py-1 rounded bg-accent text-accent-fg hover:opacity-90">Sign in</button>
+          <button onclick={signInGraph} class="px-2 py-1 rounded bg-accent text-accent-fg hover:opacity-90">Sign in</button>
         {/if}
       </div>
     </div>
@@ -219,4 +330,12 @@
 
 {#if showCategoryDialog}
   <CategoryDialog onClose={() => (showCategoryDialog = false)} />
+{/if}
+
+{#if showContactDialog}
+  <ContactDialog onClose={() => (showContactDialog = false)} />
+{/if}
+
+{#if showCoworkerDialog}
+  <CoworkerDialog onClose={() => (showCoworkerDialog = false)} />
 {/if}

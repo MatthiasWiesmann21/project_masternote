@@ -73,6 +73,16 @@
                 {n.categoryName}
               </span>
             {/if}
+            {#if n.contact}
+              <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400">
+                👤 {n.contact.kind === 'company' && n.contact.companyName ? n.contact.companyName : [n.contact.firstName, n.contact.lastName].filter(Boolean).join(' ')}
+              </span>
+            {/if}
+            {#if n.coworker}
+              <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-600 dark:text-green-400">
+                🤝 {[n.coworker.firstName, n.coworker.lastName].filter(Boolean).join(' ')}
+              </span>
+            {/if}
             {#each n.tags as tag}
               <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-bg-muted text-fg-muted">
                 #{tag.name}

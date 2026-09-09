@@ -54,14 +54,16 @@ export async function saveNote(
   id: number | null,
   title: string,
   content: string,
-  categoryId: number | null
+  categoryId: number | null,
+  contactId: number | null = null,
+  coworkerId: number | null = null
 ): Promise<Note | null> {
   try {
     let saved: Note;
     if (id === null) {
-      saved = await api.createNote(title, content, categoryId);
+      saved = await api.createNote(title, content, categoryId, contactId, coworkerId);
     } else {
-      saved = await api.updateNote(id, title, content, categoryId);
+      saved = await api.updateNote(id, title, content, categoryId, contactId, coworkerId);
     }
     await loadNotes();
     return saved;

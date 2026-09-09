@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use std::sync::{Arc, Mutex};
 
-use crate::models::{Category, Note, Reminder, SearchResult, Tag};
+use crate::models::{Category, Contact, Coworker, Note, Reminder, SearchResult, Tag};
 
 pub struct Database {
     conn: Arc<Mutex<Connection>>,
@@ -21,9 +21,24 @@ impl Database {
     }
 
     pub fn run_migrations(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let sql = include_str!("../migrations/0001_init.sql");
+        let sql1 = include_str!("../migrations/0001_init.sql");
+        let sql2 = include_str!("../migrations/0002_contacts_coworkers.sql");
         let conn = self.conn.lock().unwrap();
-        conn.execute_batch(sql)?;
+        conn.execute_batch(sql1)?;
+        // v2 uses ALTER TABLE which can fail if column already exists — ignore that case
+        for stmt in sql2.split(';') {
+            let trimmed = stmt.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Err(e) = conn.execute(trimmed, []) {
+                // "duplicate column name" is expected on re-run
+                let msg = e.to_string();
+                if !msg.contains("duplicate column name") {
+                    return Err(Box::new(e));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -68,6 +83,61 @@ impl Database {
         Ok(reminder)
     }
 
+    fn fetch_contact(conn: &Connection, contact_id: Option<i64>) -> Result<Option<Contact>, rusqlite::Error> {
+        if let Some(cid) = contact_id {
+            conn.query_row(
+                "SELECT id, last_name, first_name, address, email, gender, kind, company_name, customer_identifier, created_at, updated_at
+                 FROM contacts WHERE id = ?1",
+                params![cid],
+                Self::row_to_contact,
+            )
+            .optional()
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn fetch_coworker(conn: &Connection, coworker_id: Option<i64>) -> Result<Option<Coworker>, rusqlite::Error> {
+        if let Some(wid) = coworker_id {
+            conn.query_row(
+                "SELECT id, last_name, first_name, email, created_at, updated_at
+                 FROM coworkers WHERE id = ?1",
+                params![wid],
+                Self::row_to_coworker,
+            )
+            .optional()
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn row_to_contact(row: &rusqlite::Row) -> rusqlite::Result<Contact> {
+        Ok(Contact {
+            id: row.get(0)?,
+            last_name: row.get(1)?,
+            first_name: row.get(2)?,
+            address: row.get(3)?,
+            email: row.get(4)?,
+            gender: row.get(5)?,
+            kind: row.get(6)?,
+            company_name: row.get(7)?,
+            customer_identifier: row.get(8)?,
+            created_at: row.get(9)?,
+            updated_at: row.get(10)?,
+        })
+    }
+
+    fn row_to_coworker(row: &rusqlite::Row) -> rusqlite::Result<Coworker> {
+        Ok(Coworker {
+            id: row.get(0)?,
+            last_name: row.get(1)?,
+            first_name: row.get(2)?,
+            email: row.get(3)?,
+            created_at: row.get(4)?,
+            updated_at: row.get(5)?,
+        })
+    }
+
     fn fetch_note_row(row: &rusqlite::Row) -> rusqlite::Result<Note> {
         Ok(Note {
             id: row.get(0)?,
@@ -81,16 +151,28 @@ impl Database {
             source: row.get(8)?,
             tags: vec![],
             reminder: None,
+            contact_id: row.get(9)?,
+            coworker_id: row.get(10)?,
+            contact: None,
+            coworker: None,
         })
     }
 
     const NOTE_SELECT: &'static str =
         "SELECT n.id, n.title, n.content, n.category_id, c.name, c.color, \
-         n.created_at, n.updated_at, n.source \
+         n.created_at, n.updated_at, n.source, n.contact_id, n.coworker_id \
          FROM notes n \
          LEFT JOIN categories c ON n.category_id = c.id";
 
-    // --- Public API ---
+    fn enrich_note(conn: &Connection, note: &mut Note) -> Result<(), rusqlite::Error> {
+        note.tags = Self::fetch_tags_for_note(conn, note.id)?;
+        note.reminder = Self::fetch_reminder_for_note(conn, note.id)?;
+        note.contact = Self::fetch_contact(conn, note.contact_id)?;
+        note.coworker = Self::fetch_coworker(conn, note.coworker_id)?;
+        Ok(())
+    }
+
+    // --- Note CRUD ---
 
     pub fn create_note(
         &self,
@@ -98,12 +180,23 @@ impl Database {
         content: &str,
         category_id: Option<i64>,
     ) -> Result<Note, rusqlite::Error> {
+        self.create_note_full(title, content, category_id, None, None)
+    }
+
+    pub fn create_note_full(
+        &self,
+        title: &str,
+        content: &str,
+        category_id: Option<i64>,
+        contact_id: Option<i64>,
+        coworker_id: Option<i64>,
+    ) -> Result<Note, rusqlite::Error> {
         let now = Self::now_iso();
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO notes (title, content, category_id, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?4)",
-            params![title, content, category_id, now],
+            "INSERT INTO notes (title, content, category_id, contact_id, coworker_id, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            params![title, content, category_id, contact_id, coworker_id, now],
         )?;
         let id = conn.last_insert_rowid();
 
@@ -113,8 +206,7 @@ impl Database {
                 params![id],
                 Self::fetch_note_row,
             )?;
-        note.tags = Self::fetch_tags_for_note(&conn, id)?;
-        note.reminder = Self::fetch_reminder_for_note(&conn, id)?;
+        Self::enrich_note(&conn, &mut note)?;
         Ok(note)
     }
 
@@ -125,12 +217,24 @@ impl Database {
         content: &str,
         category_id: Option<i64>,
     ) -> Result<Note, rusqlite::Error> {
+        self.update_note_full(id, title, content, category_id, None, None)
+    }
+
+    pub fn update_note_full(
+        &self,
+        id: i64,
+        title: &str,
+        content: &str,
+        category_id: Option<i64>,
+        contact_id: Option<i64>,
+        coworker_id: Option<i64>,
+    ) -> Result<Note, rusqlite::Error> {
         let now = Self::now_iso();
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE notes SET title = ?1, content = ?2, category_id = ?3, updated_at = ?4
-             WHERE id = ?5",
-            params![title, content, category_id, now, id],
+            "UPDATE notes SET title = ?1, content = ?2, category_id = ?3, contact_id = ?4, coworker_id = ?5, updated_at = ?6
+             WHERE id = ?7",
+            params![title, content, category_id, contact_id, coworker_id, now, id],
         )?;
 
         let mut note = conn.query_row(
@@ -138,8 +242,7 @@ impl Database {
             params![id],
             Self::fetch_note_row,
         )?;
-        note.tags = Self::fetch_tags_for_note(&conn, id)?;
-        note.reminder = Self::fetch_reminder_for_note(&conn, id)?;
+        Self::enrich_note(&conn, &mut note)?;
         Ok(note)
     }
 
@@ -156,8 +259,7 @@ impl Database {
             params![id],
             Self::fetch_note_row,
         )?;
-        note.tags = Self::fetch_tags_for_note(&conn, id)?;
-        note.reminder = Self::fetch_reminder_for_note(&conn, id)?;
+        Self::enrich_note(&conn, &mut note)?;
         Ok(note)
     }
 
@@ -173,8 +275,7 @@ impl Database {
         drop(stmt);
 
         for note in &mut notes {
-            note.tags = Self::fetch_tags_for_note(&conn, note.id)?;
-            note.reminder = Self::fetch_reminder_for_note(&conn, note.id)?;
+            Self::enrich_note(&conn, note)?;
         }
         Ok(notes)
     }
@@ -202,6 +303,8 @@ impl Database {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(results)
     }
+
+    // --- Tags ---
 
     pub fn list_tags(&self) -> Result<Vec<Tag>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
@@ -247,6 +350,8 @@ impl Database {
         Ok(())
     }
 
+    // --- Categories ---
+
     pub fn list_categories(&self) -> Result<Vec<Category>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT id, name, color FROM categories ORDER BY name")?;
@@ -275,6 +380,8 @@ impl Database {
             color: color.to_string(),
         })
     }
+
+    // --- Reminders ---
 
     pub fn set_reminder(
         &self,
@@ -342,7 +449,8 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT r.id, r.note_id, r.due_at, r.fired, r.calendar_event_id,
-                    n.id, n.title, n.content, n.category_id, n.created_at, n.updated_at, n.source
+                    n.id, n.title, n.content, n.category_id, n.created_at, n.updated_at, n.source,
+                    n.contact_id, n.coworker_id
              FROM reminders r
              JOIN notes n ON n.id = r.note_id
              WHERE r.fired = 0 AND r.due_at <= ?1",
@@ -368,12 +476,172 @@ impl Database {
                     source: row.get(11)?,
                     tags: vec![],
                     reminder: None,
+                    contact_id: row.get(12)?,
+                    coworker_id: row.get(13)?,
+                    contact: None,
+                    coworker: None,
                 };
                 Ok((reminder, note))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
+
+    // --- Contacts (customers) ---
+
+    pub fn list_contacts(&self) -> Result<Vec<Contact>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, last_name, first_name, address, email, gender, kind, company_name, customer_identifier, created_at, updated_at
+             FROM contacts ORDER BY last_name, first_name",
+        )?;
+        let contacts = stmt
+            .query_map([], Self::row_to_contact)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(contacts)
+    }
+
+    pub fn search_contacts(&self, query: &str) -> Result<Vec<Contact>, rusqlite::Error> {
+        let pattern = format!("%{}%", query);
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, last_name, first_name, address, email, gender, kind, company_name, customer_identifier, created_at, updated_at
+             FROM contacts
+             WHERE last_name LIKE ?1 OR first_name LIKE ?1 OR email LIKE ?1 OR company_name LIKE ?1 OR customer_identifier LIKE ?1
+             ORDER BY last_name, first_name
+             LIMIT 50",
+        )?;
+        let contacts = stmt
+            .query_map(params![pattern], Self::row_to_contact)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(contacts)
+    }
+
+    pub fn create_contact(&self, c: &ContactInput) -> Result<Contact, rusqlite::Error> {
+        let now = Self::now_iso();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO contacts (last_name, first_name, address, email, gender, kind, company_name, customer_identifier, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+            params![c.last_name, c.first_name, c.address, c.email, c.gender, c.kind, c.company_name, c.customer_identifier, now],
+        )?;
+        let id = conn.last_insert_rowid();
+        conn.query_row(
+            "SELECT id, last_name, first_name, address, email, gender, kind, company_name, customer_identifier, created_at, updated_at
+             FROM contacts WHERE id = ?1",
+            params![id],
+            Self::row_to_contact,
+        )
+    }
+
+    pub fn update_contact(&self, id: i64, c: &ContactInput) -> Result<Contact, rusqlite::Error> {
+        let now = Self::now_iso();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE contacts SET last_name=?1, first_name=?2, address=?3, email=?4, gender=?5, kind=?6, company_name=?7, customer_identifier=?8, updated_at=?9
+             WHERE id=?10",
+            params![c.last_name, c.first_name, c.address, c.email, c.gender, c.kind, c.company_name, c.customer_identifier, now, id],
+        )?;
+        conn.query_row(
+            "SELECT id, last_name, first_name, address, email, gender, kind, company_name, customer_identifier, created_at, updated_at
+             FROM contacts WHERE id = ?1",
+            params![id],
+            Self::row_to_contact,
+        )
+    }
+
+    pub fn delete_contact(&self, id: i64) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM contacts WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    // --- Coworkers ---
+
+    pub fn list_coworkers(&self) -> Result<Vec<Coworker>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, last_name, first_name, email, created_at, updated_at
+             FROM coworkers ORDER BY last_name, first_name",
+        )?;
+        let coworkers = stmt
+            .query_map([], Self::row_to_coworker)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(coworkers)
+    }
+
+    pub fn search_coworkers(&self, query: &str) -> Result<Vec<Coworker>, rusqlite::Error> {
+        let pattern = format!("%{}%", query);
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, last_name, first_name, email, created_at, updated_at
+             FROM coworkers
+             WHERE last_name LIKE ?1 OR first_name LIKE ?1 OR email LIKE ?1
+             ORDER BY last_name, first_name
+             LIMIT 50",
+        )?;
+        let coworkers = stmt
+            .query_map(params![pattern], Self::row_to_coworker)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(coworkers)
+    }
+
+    pub fn create_coworker(&self, c: &CoworkerInput) -> Result<Coworker, rusqlite::Error> {
+        let now = Self::now_iso();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO coworkers (last_name, first_name, email, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?4)",
+            params![c.last_name, c.first_name, c.email, now],
+        )?;
+        let id = conn.last_insert_rowid();
+        conn.query_row(
+            "SELECT id, last_name, first_name, email, created_at, updated_at
+             FROM coworkers WHERE id = ?1",
+            params![id],
+            Self::row_to_coworker,
+        )
+    }
+
+    pub fn update_coworker(&self, id: i64, c: &CoworkerInput) -> Result<Coworker, rusqlite::Error> {
+        let now = Self::now_iso();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE coworkers SET last_name=?1, first_name=?2, email=?3, updated_at=?4
+             WHERE id=?5",
+            params![c.last_name, c.first_name, c.email, now, id],
+        )?;
+        conn.query_row(
+            "SELECT id, last_name, first_name, email, created_at, updated_at
+             FROM coworkers WHERE id = ?1",
+            params![id],
+            Self::row_to_coworker,
+        )
+    }
+
+    pub fn delete_coworker(&self, id: i64) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM coworkers WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+}
+
+// Input structs for create/update
+pub struct ContactInput {
+    pub last_name: String,
+    pub first_name: String,
+    pub address: Option<String>,
+    pub email: Option<String>,
+    pub gender: Option<String>,
+    pub kind: String,
+    pub company_name: Option<String>,
+    pub customer_identifier: Option<String>,
+}
+
+pub struct CoworkerInput {
+    pub last_name: String,
+    pub first_name: String,
+    pub email: Option<String>,
 }
 
 // Helper for tests

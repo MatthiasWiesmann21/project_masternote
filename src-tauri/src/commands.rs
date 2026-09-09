@@ -1,10 +1,21 @@
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::db::Database;
+use crate::db::{ContactInput, CoworkerInput, Database};
 use crate::graph::GraphClient;
-use crate::models::{Category, Note, Reminder, SearchResult, Tag};
+use crate::hotkey::HotkeyManager;
+use crate::models::{Category, Contact, Coworker, Note, Reminder, SearchResult, Tag};
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HotkeyConfig {
+    pub open: String,
+    pub save_close: String,
+}
+
+// --- Note commands ---
 
 #[tauri::command]
 pub fn create_note(
@@ -12,8 +23,11 @@ pub fn create_note(
     title: String,
     content: String,
     category_id: Option<i64>,
+    contact_id: Option<i64>,
+    coworker_id: Option<i64>,
 ) -> Result<Note, String> {
-    db.create_note(&title, &content, category_id).map_err(|e| e.to_string())
+    db.create_note_full(&title, &content, category_id, contact_id, coworker_id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -23,8 +37,11 @@ pub fn update_note(
     title: String,
     content: String,
     category_id: Option<i64>,
+    contact_id: Option<i64>,
+    coworker_id: Option<i64>,
 ) -> Result<Note, String> {
-    db.update_note(id, &title, &content, category_id).map_err(|e| e.to_string())
+    db.update_note_full(id, &title, &content, category_id, contact_id, coworker_id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -57,6 +74,8 @@ pub fn search_notes(
         .map_err(|e| e.to_string())
 }
 
+// --- Tag commands ---
+
 #[tauri::command]
 pub fn list_tags(db: State<'_, Arc<Database>>) -> Result<Vec<Tag>, String> {
     db.list_tags().map_err(|e| e.to_string())
@@ -82,6 +101,8 @@ pub fn remove_tag_from_note(
         .map_err(|e| e.to_string())
 }
 
+// --- Category commands ---
+
 #[tauri::command]
 pub fn list_categories(db: State<'_, Arc<Database>>) -> Result<Vec<Category>, String> {
     db.list_categories().map_err(|e| e.to_string())
@@ -95,6 +116,8 @@ pub fn create_category(
 ) -> Result<Category, String> {
     db.create_category(&name, &color).map_err(|e| e.to_string())
 }
+
+// --- Reminder commands ---
 
 #[tauri::command]
 pub fn set_reminder(
@@ -131,6 +154,8 @@ pub fn delete_reminder(db: State<'_, Arc<Database>>, note_id: i64) -> Result<(),
     db.delete_reminder(note_id).map_err(|e| e.to_string())
 }
 
+// --- Graph commands ---
+
 #[tauri::command]
 pub async fn graph_sign_in(graph: State<'_, GraphClient>) -> Result<bool, String> {
     graph.sign_in().await.map_err(|e| e.to_string())
@@ -146,6 +171,8 @@ pub fn graph_is_signed_in(graph: State<'_, GraphClient>) -> Result<bool, String>
     Ok(graph.is_signed_in())
 }
 
+// --- Widget commands ---
+
 #[tauri::command]
 pub fn hide_widget(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
@@ -155,4 +182,154 @@ pub fn hide_widget(app: tauri::AppHandle) -> Result<(), String> {
             .map_err(|e| format!("Failed to hide window: {}", e))?;
     }
     Ok(())
+}
+
+// --- Hotkey commands ---
+
+#[tauri::command]
+pub fn get_hotkeys(hotkey_manager: State<'_, HotkeyManager>) -> Result<HotkeyConfig, String> {
+    Ok(HotkeyConfig {
+        open: hotkey_manager.get_open_hotkey(),
+        save_close: hotkey_manager.get_save_close_hotkey(),
+    })
+}
+
+#[tauri::command]
+pub fn set_open_hotkey(
+    hotkey_manager: State<'_, HotkeyManager>,
+    hotkey: String,
+) -> Result<(), String> {
+    hotkey_manager.set_open_hotkey(&hotkey)
+}
+
+#[tauri::command]
+pub fn set_save_close_hotkey(
+    hotkey_manager: State<'_, HotkeyManager>,
+    hotkey: String,
+) -> Result<(), String> {
+    hotkey_manager.set_save_close_hotkey(&hotkey)
+}
+
+// --- Contact commands ---
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactPayload {
+    pub last_name: String,
+    pub first_name: String,
+    pub address: Option<String>,
+    pub email: Option<String>,
+    pub gender: Option<String>,
+    pub kind: String,
+    pub company_name: Option<String>,
+    pub customer_identifier: Option<String>,
+}
+
+impl From<&ContactPayload> for ContactInput {
+    fn from(c: &ContactPayload) -> Self {
+        ContactInput {
+            last_name: c.last_name.clone(),
+            first_name: c.first_name.clone(),
+            address: c.address.clone(),
+            email: c.email.clone(),
+            gender: c.gender.clone(),
+            kind: c.kind.clone(),
+            company_name: c.company_name.clone(),
+            customer_identifier: c.customer_identifier.clone(),
+        }
+    }
+}
+
+#[tauri::command]
+pub fn list_contacts(db: State<'_, Arc<Database>>) -> Result<Vec<Contact>, String> {
+    db.list_contacts().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn search_contacts(
+    db: State<'_, Arc<Database>>,
+    query: String,
+) -> Result<Vec<Contact>, String> {
+    db.search_contacts(&query).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn create_contact(
+    db: State<'_, Arc<Database>>,
+    contact: ContactPayload,
+) -> Result<Contact, String> {
+    db.create_contact(&ContactInput::from(&contact))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn update_contact(
+    db: State<'_, Arc<Database>>,
+    id: i64,
+    contact: ContactPayload,
+) -> Result<Contact, String> {
+    db.update_contact(id, &ContactInput::from(&contact))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_contact(db: State<'_, Arc<Database>>, id: i64) -> Result<(), String> {
+    db.delete_contact(id).map_err(|e| e.to_string())
+}
+
+// --- Coworker commands ---
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoworkerPayload {
+    pub last_name: String,
+    pub first_name: String,
+    pub email: Option<String>,
+}
+
+impl From<&CoworkerPayload> for CoworkerInput {
+    fn from(c: &CoworkerPayload) -> Self {
+        CoworkerInput {
+            last_name: c.last_name.clone(),
+            first_name: c.first_name.clone(),
+            email: c.email.clone(),
+        }
+    }
+}
+
+#[tauri::command]
+pub fn list_coworkers(db: State<'_, Arc<Database>>) -> Result<Vec<Coworker>, String> {
+    db.list_coworkers().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn search_coworkers(
+    db: State<'_, Arc<Database>>,
+    query: String,
+) -> Result<Vec<Coworker>, String> {
+    db.search_coworkers(&query).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn create_coworker(
+    db: State<'_, Arc<Database>>,
+    coworker: CoworkerPayload,
+) -> Result<Coworker, String> {
+    db.create_coworker(&CoworkerInput::from(&coworker))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn update_coworker(
+    db: State<'_, Arc<Database>>,
+    id: i64,
+    coworker: CoworkerPayload,
+) -> Result<Coworker, String> {
+    db.update_coworker(id, &CoworkerInput::from(&coworker))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_coworker(db: State<'_, Arc<Database>>, id: i64) -> Result<(), String> {
+    db.delete_coworker(id).map_err(|e| e.to_string())
 }

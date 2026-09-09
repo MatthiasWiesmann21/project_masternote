@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod db;
 pub mod graph;
+pub mod hotkey;
 pub mod models;
 pub mod reminders;
 
@@ -11,10 +12,10 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, WindowEvent,
 };
-use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 use db::Database;
 use graph::GraphClient;
+use hotkey::HotkeyManager;
 
 fn toggle_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -88,14 +89,12 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Global hotkey: Ctrl+Shift+Space toggles widget
-            let app_handle = app.handle().clone();
-            app.global_shortcut()
-                .on_shortcut("Ctrl+Shift+Space", move |_app, _shortcut, event| {
-                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        toggle_window(&app_handle);
-                    }
-                })?;
+            // Register configurable global hotkeys
+            let hotkey_manager = HotkeyManager::new(app.handle().clone());
+            if let Err(e) = hotkey_manager.register_all() {
+                log::error!("Failed to register hotkeys: {}", e);
+            }
+            app.manage(hotkey_manager);
 
             Ok(())
         })
@@ -122,6 +121,19 @@ pub fn run() {
             commands::graph_sign_out,
             commands::graph_is_signed_in,
             commands::hide_widget,
+            commands::get_hotkeys,
+            commands::set_open_hotkey,
+            commands::set_save_close_hotkey,
+            commands::list_contacts,
+            commands::search_contacts,
+            commands::create_contact,
+            commands::update_contact,
+            commands::delete_contact,
+            commands::list_coworkers,
+            commands::search_coworkers,
+            commands::create_coworker,
+            commands::update_coworker,
+            commands::delete_coworker,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
