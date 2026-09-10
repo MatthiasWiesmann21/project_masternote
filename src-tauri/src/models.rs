@@ -67,6 +67,8 @@ pub struct Contact {
     pub kind: String,
     pub company_name: Option<String>,
     pub customer_identifier: Option<String>,
+    pub phone: Option<String>,
+    pub mobile: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

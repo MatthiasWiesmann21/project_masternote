@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Note } from '$lib/api';
-  import { selectedNoteId, activeTagFilter, activeCategoryFilter, searchQuery } from '$lib/stores/notes';
+  import { selectedNoteId, activeTagFilter, activeCategoryFilter, searchQuery, timeRangeSort, filteredNotes } from '$lib/stores/notes';
   import * as api from '$lib/api';
 
   let { notes } = $props<{ notes: Note[] }>();
@@ -13,7 +13,32 @@
     if ($activeCategoryFilter !== null) {
       result = result.filter((n: Note) => n.categoryId === $activeCategoryFilter);
     }
+
+    // Time range filtering
+    const sort = $timeRangeSort;
+    const now = new Date();
+    if (sort === 'today') {
+      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      result = result.filter((n: Note) => new Date(n.createdAt) >= startOfDay);
+    } else if (sort === 'week') {
+      const startOfWeek = new Date(now);
+      startOfWeek.setDate(now.getDate() - 7);
+      result = result.filter((n: Note) => new Date(n.createdAt) >= startOfWeek);
+    }
+
+    // Sort
+    if (sort === 'oldest') {
+      result = [...result].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    } else {
+      result = [...result].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    }
+
     return result;
+  });
+
+  // Sync filtered notes to store for keyboard navigation
+  $effect(() => {
+    filteredNotes.set(filtered);
   });
 
   function selectNote(n: Note) {

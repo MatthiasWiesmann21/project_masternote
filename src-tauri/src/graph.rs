@@ -1,7 +1,7 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_store::StoreExt;
 
 const GRAPH_SCOPES: &[&str] = &["Calendars.ReadWrite", "offline_access"];
@@ -33,22 +33,45 @@ struct GraphEvent {
 
 pub struct GraphClient {
     client: reqwest::Client,
-    client_id: String,
+    client_id: Mutex<String>,
     store: Arc<tauri_plugin_store::Store<tauri::Wry>>,
+    app: AppHandle,
 }
 
 impl GraphClient {
     pub fn new(app: &AppHandle) -> Result<Self, String> {
-        let client_id = std::env::var("MASTERNOTE_GRAPH_CLIENT_ID")
-            .unwrap_or_else(|_| "YOUR_CLIENT_ID_HERE".to_string());
         let store = app
             .store("graph.json")
             .map_err(|e| format!("Failed to open store: {}", e))?;
+
+        // Read client ID from store first, then fall back to env var
+        let client_id = store
+            .get("client_id")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("MASTERNOTE_GRAPH_CLIENT_ID").ok())
+            .unwrap_or_else(|| String::new());
+
         Ok(Self {
             client: reqwest::Client::new(),
-            client_id,
+            client_id: Mutex::new(client_id),
             store,
+            app: app.clone(),
         })
+    }
+
+    pub fn get_client_id(&self) -> Result<String, String> {
+        let id = self.client_id.lock().unwrap().clone();
+        Ok(id)
+    }
+
+    pub fn set_client_id(&self, client_id: String) -> Result<(), String> {
+        let trimmed = client_id.trim().to_string();
+        *self.client_id.lock().unwrap() = trimmed.clone();
+        self.store
+            .set("client_id", serde_json::Value::String(trimmed));
+        self.store.save().ok();
+        Ok(())
     }
 
     pub fn is_signed_in(&self) -> bool {
@@ -59,9 +82,10 @@ impl GraphClient {
     }
 
     pub async fn sign_in(&self) -> Result<bool, String> {
-        if self.client_id == "YOUR_CLIENT_ID_HERE" {
+        let client_id = self.client_id.lock().unwrap().clone();
+        if client_id.is_empty() {
             return Err(
-                "Microsoft Graph client_id not configured. Set MASTERNOTE_GRAPH_CLIENT_ID env var."
+                "Microsoft Graph client ID not configured. Enter it in Settings → Outlook."
                     .to_string(),
             );
         }
@@ -71,7 +95,7 @@ impl GraphClient {
             .client
             .post(DEVICE_CODE_URL)
             .form(&[
-                ("client_id", self.client_id.as_str()),
+                ("client_id", client_id.as_str()),
                 ("scope", &GRAPH_SCOPES.join(" ")),
             ])
             .send()
@@ -81,11 +105,23 @@ impl GraphClient {
             .await
             .map_err(|e| format!("Failed to parse device code response: {}", e))?;
 
-        // Show the user code message via notification
+        // Show the user code message via notification + frontend event
         log::info!("Graph sign-in: {}", device_code.message);
 
         // Emit event so frontend can show the verification URL/code
-        // (For now we just log; a real impl would emit to the window)
+        let _ = self.app.emit(
+            "graph-device-code",
+            serde_json::json!({
+                "message": device_code.message,
+                "user_code": device_code.user_code,
+                "verification_uri": device_code.verification_uri,
+            }),
+        );
+
+        // Also try to open the verification URL in the browser
+        if let Some(window) = self.app.get_webview_window("main") {
+            let _ = window.set_focus();
+        }
 
         // Step 2: Poll for token
         let interval = device_code.interval.max(5);
@@ -100,7 +136,7 @@ impl GraphClient {
                 .post(TOKEN_URL)
                 .form(&[
                     ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-                    ("client_id", self.client_id.as_str()),
+                    ("client_id", client_id.as_str()),
                     ("device_code", &device_code.device_code),
                 ])
                 .send()
@@ -178,16 +214,26 @@ impl GraphClient {
         start_iso: &str,
         body: &str,
     ) -> Result<String, String> {
+        self.create_event_with_duration(title, start_iso, body, 30)
+    }
+
+    pub fn create_event_with_duration(
+        &self,
+        title: &str,
+        start_iso: &str,
+        body: &str,
+        duration_minutes: i64,
+    ) -> Result<String, String> {
         let token = self.get_access_token()?;
         let client = self.client.clone();
         let start = start_iso.to_string();
         let title = title.to_string();
         let body = body.to_string();
 
-        // Compute end time = start + 30 min
+        // Compute end time = start + duration
         let start_dt = chrono::DateTime::parse_from_rfc3339(&start)
             .map_err(|e| format!("Invalid start time: {}", e))?;
-        let end_dt = start_dt + chrono::Duration::minutes(30);
+        let end_dt = start_dt + chrono::Duration::minutes(duration_minutes);
         let end = end_dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
         let event_body = serde_json::json!({

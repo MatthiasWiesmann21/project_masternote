@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Tag } from '$lib/api';
   import * as api from '$lib/api';
-  import { loadNotes, loadTags, tags as tagsStore } from '$lib/stores/notes';
+  import { loadNotes, loadTags } from '$lib/stores/notes';
 
   let { noteId, tags } = $props<{ noteId: number; tags: Tag[] }>();
 
@@ -33,22 +33,29 @@
     if (e.key === 'Enter') {
       e.preventDefault();
       addTag();
+    } else if (e.key === 'Backspace' && newTag === '' && tags.length > 0) {
+      // Remove last tag on backspace when input is empty
+      removeTag(tags[tags.length - 1].id);
     }
   }
 </script>
 
 <div class="flex items-center gap-1 flex-wrap">
   {#each tags as tag (tag.id)}
-    <span class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-accent/15 text-accent">
+    <span class="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full bg-accent/15 text-accent">
       #{tag.name}
-      <button onclick={() => removeTag(tag.id)} class="hover:opacity-70 text-[9px]">✕</button>
+      <button
+        onclick={() => removeTag(tag.id)}
+        class="hover:text-red-500 text-[9px] leading-none"
+        title="Remove tag"
+      >✕</button>
     </span>
   {/each}
   <input
     bind:this={inputEl}
     bind:value={newTag}
     onkeydown={onKeydown}
-    placeholder="add tag…"
-    class="text-[10px] bg-transparent outline-none placeholder:text-fg-muted w-20"
+    placeholder={tags.length === 0 ? 'add tag…' : ''}
+    class="text-[10px] bg-transparent outline-none placeholder:text-fg-muted flex-1 min-w-16"
   />
 </div>

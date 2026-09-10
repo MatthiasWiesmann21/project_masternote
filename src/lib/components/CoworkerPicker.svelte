@@ -9,6 +9,19 @@
   let results = $state<Coworker[]>([]);
   let showDropdown = $state(false);
   let selectedCoworker = $state<Coworker | null>(null);
+  let searchEl = $state<HTMLInputElement | null>(null);
+  let highlightedIndex = $state(-1);
+  let dropdownEl = $state<HTMLDivElement | null>(null);
+
+  export function focusSearch() {
+    if (selectedCoworker) {
+      clear();
+      setTimeout(() => { searchEl?.focus(); searchEl?.select(); }, 0);
+    } else {
+      searchEl?.focus();
+      searchEl?.select();
+    }
+  }
 
   async function loadSelected() {
     if (selectedId !== null) {
@@ -40,6 +53,7 @@
     }
     try {
       results = await api.searchCoworkers(query.trim());
+      highlightedIndex = -1;
     } catch {
       results = [];
     }
@@ -57,6 +71,7 @@
     query = '';
     results = [];
     showDropdown = false;
+    highlightedIndex = -1;
   }
 
   function clear() {
@@ -64,6 +79,36 @@
     selectedCoworker = null;
     query = '';
     results = [];
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (!showDropdown || results.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      highlightedIndex = Math.min(highlightedIndex + 1, results.length - 1);
+      scrollIntoView();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      highlightedIndex = Math.max(highlightedIndex - 1, 0);
+      scrollIntoView();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (highlightedIndex >= 0 && highlightedIndex < results.length) {
+        pick(results[highlightedIndex]);
+      }
+    } else if (e.key === 'Escape') {
+      showDropdown = false;
+      highlightedIndex = -1;
+    }
+  }
+
+  function scrollIntoView() {
+    setTimeout(() => {
+      const items = dropdownEl?.querySelectorAll('[data-idx]');
+      if (items && highlightedIndex >= 0 && highlightedIndex < items.length) {
+        items[highlightedIndex].scrollIntoView({ block: 'nearest' });
+      }
+    }, 0);
   }
 
   function fullName(c: Coworker): string {
@@ -81,18 +126,22 @@
     </div>
   {:else}
     <input
+      bind:this={searchEl}
       bind:value={query}
       onfocus={() => (showDropdown = true)}
       onblur={() => setTimeout(() => (showDropdown = false), 150)}
-      placeholder="Search coworker…"
+      onkeydown={handleKeydown}
+      placeholder="Search coworker… (Ctrl+Shift+H)"
       class="text-xs bg-bg-muted rounded px-2 py-1 border border-border outline-none w-full"
     />
     {#if showDropdown && results.length > 0}
-      <div class="absolute top-full left-0 right-0 mt-1 bg-bg rounded-lg border border-border shadow-lg max-h-48 overflow-y-auto z-50">
-        {#each results as c (c.id)}
+      <div bind:this={dropdownEl} class="absolute top-full left-0 right-0 mt-1 bg-bg rounded-lg border border-border shadow-lg max-h-48 overflow-y-auto z-50">
+        {#each results as c, i (c.id)}
           <button
+            data-idx={i}
             onmousedown={() => pick(c)}
-            class="w-full text-left px-2 py-1.5 hover:bg-bg-subtle text-xs border-b border-border last:border-0"
+            onmouseenter={() => (highlightedIndex = i)}
+            class="w-full text-left px-2 py-1.5 text-xs border-b border-border last:border-0 {i === highlightedIndex ? 'bg-accent text-accent-fg' : 'hover:bg-bg-subtle'}"
           >
             <div class="font-medium">{fullName(c)}</div>
             {#if c.email}

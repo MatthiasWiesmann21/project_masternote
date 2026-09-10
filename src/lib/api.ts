@@ -55,6 +55,8 @@ export interface Contact {
   kind: string; // 'private' or 'company'
   companyName: string | null;
   customerIdentifier: string | null;
+  phone: string | null;
+  mobile: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -124,6 +126,11 @@ export const graphSignOut = () => invoke<void>('graph_sign_out');
 
 export const graphIsSignedIn = () => invoke<boolean>('graph_is_signed_in');
 
+export const getGraphClientId = () => invoke<string>('get_graph_client_id');
+
+export const setGraphClientId = (clientId: string) =>
+  invoke<void>('set_graph_client_id', { clientId });
+
 // Widget commands
 export const hideWidget = () => invoke<void>('hide_widget');
 
@@ -168,3 +175,22 @@ export const updateCoworker = (id: number, coworker: Omit<Coworker, 'id' | 'crea
   invoke<Coworker>('update_coworker', { id, coworker });
 
 export const deleteCoworker = (id: number) => invoke<void>('delete_coworker', { id });
+
+// CSV import/export for contacts
+export const exportContactsCsv = () => invoke<string>('export_contacts_csv');
+
+export const exportContactsToFile = (path: string) =>
+  invoke<void>('export_contacts_to_file', { path });
+
+export const importContactsCsv = (csvContent: string) =>
+  invoke<number>('import_contacts_csv', { csvContent });
+
+export const importContactsFromFile = (path: string) =>
+  invoke<number>('import_contacts_from_file', { path });
+
+// Telephone rapport + calendar with contact
+export const openTelephoneRapport = (noteId: number, toEmail: string) =>
+  invoke<void>('open_telephone_rapport', { noteId, toEmail });
+
+export const createCalendarWithContact = (noteId: number, dueAt: string) =>
+  invoke<string>('create_calendar_with_contact', { noteId, dueAt });

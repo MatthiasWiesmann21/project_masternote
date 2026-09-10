@@ -171,6 +171,16 @@ pub fn graph_is_signed_in(graph: State<'_, GraphClient>) -> Result<bool, String>
     Ok(graph.is_signed_in())
 }
 
+#[tauri::command]
+pub fn get_graph_client_id(graph: State<'_, GraphClient>) -> Result<String, String> {
+    graph.get_client_id()
+}
+
+#[tauri::command]
+pub fn set_graph_client_id(graph: State<'_, GraphClient>, client_id: String) -> Result<(), String> {
+    graph.set_client_id(client_id)
+}
+
 // --- Widget commands ---
 
 #[tauri::command]
@@ -223,6 +233,8 @@ pub struct ContactPayload {
     pub kind: String,
     pub company_name: Option<String>,
     pub customer_identifier: Option<String>,
+    pub phone: Option<String>,
+    pub mobile: Option<String>,
 }
 
 impl From<&ContactPayload> for ContactInput {
@@ -236,6 +248,8 @@ impl From<&ContactPayload> for ContactInput {
             kind: c.kind.clone(),
             company_name: c.company_name.clone(),
             customer_identifier: c.customer_identifier.clone(),
+            phone: c.phone.clone(),
+            mobile: c.mobile.clone(),
         }
     }
 }
@@ -332,4 +346,224 @@ pub fn update_coworker(
 #[tauri::command]
 pub fn delete_coworker(db: State<'_, Arc<Database>>, id: i64) -> Result<(), String> {
     db.delete_coworker(id).map_err(|e| e.to_string())
+}
+
+// --- CSV import/export for contacts ---
+
+#[tauri::command]
+pub fn export_contacts_csv(db: State<'_, Arc<Database>>) -> Result<String, String> {
+    let contacts = db.list_contacts().map_err(|e| e.to_string())?;
+    let mut csv = String::new();
+    // Header
+    csv.push_str("first_name,last_name,address,email,gender,kind,company_name,customer_identifier,phone,mobile\n");
+    for c in &contacts {
+        let esc = |s: &Option<String>| -> String {
+            match s {
+                Some(v) => {
+                    if v.contains(',') || v.contains('"') || v.contains('\n') {
+                        format!("\"{}\"", v.replace('"', "\"\""))
+                    } else {
+                        v.clone()
+                    }
+                }
+                None => String::new(),
+            }
+        };
+        csv.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{}\n",
+            esc(&Some(c.first_name.clone())),
+            esc(&Some(c.last_name.clone())),
+            esc(&c.address),
+            esc(&c.email),
+            esc(&c.gender),
+            esc(&Some(c.kind.clone())),
+            esc(&c.company_name),
+            esc(&c.customer_identifier),
+            esc(&c.phone),
+            esc(&c.mobile),
+        ));
+    }
+    Ok(csv)
+}
+
+#[tauri::command]
+pub fn export_contacts_to_file(
+    db: State<'_, Arc<Database>>,
+    path: String,
+) -> Result<(), String> {
+    let csv = export_contacts_csv(db)?;
+    std::fs::write(&path, csv).map_err(|e| format!("Failed to write file: {}", e))
+}
+
+#[tauri::command]
+pub fn import_contacts_from_file(
+    db: State<'_, Arc<Database>>,
+    path: String,
+) -> Result<i32, String> {
+    let csv_content =
+        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e))?;
+    import_contacts_csv(db, csv_content)
+}
+
+#[tauri::command]
+pub fn import_contacts_csv(
+    db: State<'_, Arc<Database>>,
+    csv_content: String,
+) -> Result<i32, String> {
+    let mut lines = csv_content.lines();
+    let header = lines.next().ok_or("Empty CSV")?;
+    let header_cols: Vec<String> = header.split(',').map(|c| c.trim().to_lowercase()).collect();
+
+    let col_idx = |name: &str| -> Option<usize> {
+        header_cols.iter().position(|c| c == name)
+    };
+
+    let mut count = 0i32;
+    for line in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let fields: Vec<String> = parse_csv_line(line);
+        let get = |name: &str| -> Option<String> {
+            col_idx(name).and_then(|i| fields.get(i).map(|s| s.trim().to_string())).filter(|s| !s.is_empty())
+        };
+
+        let input = ContactInput {
+            last_name: get("last_name").unwrap_or_default(),
+            first_name: get("first_name").unwrap_or_default(),
+            address: get("address"),
+            email: get("email"),
+            gender: get("gender"),
+            kind: get("kind").unwrap_or_else(|| "private".to_string()),
+            company_name: get("company_name"),
+            customer_identifier: get("customer_identifier"),
+            phone: get("phone"),
+            mobile: get("mobile"),
+        };
+        if input.last_name.is_empty() && input.first_name.is_empty() && input.company_name.is_none() {
+            continue;
+        }
+        db.create_contact(&input).map_err(|e| e.to_string())?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+fn parse_csv_line(line: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if in_quotes => {
+                if chars.peek() == Some(&'"') {
+                    current.push('"');
+                    chars.next();
+                } else {
+                    in_quotes = false;
+                }
+            }
+            '"' if !in_quotes => {
+                in_quotes = true;
+            }
+            ',' if !in_quotes => {
+                result.push(current.clone());
+                current.clear();
+            }
+            _ => current.push(c),
+        }
+    }
+    result.push(current);
+    result
+}
+
+// --- Telephone rapport + calendar with contact ---
+
+#[tauri::command]
+pub fn open_telephone_rapport(
+    db: State<'_, Arc<Database>>,
+    app: tauri::AppHandle,
+    note_id: i64,
+    to_email: String,
+) -> Result<(), String> {
+    use tauri_plugin_shell::ShellExt;
+
+    let note = db.get_note(note_id).map_err(|e| e.to_string())?;
+    let contact = note.contact.as_ref().ok_or("No contact linked to this note")?;
+
+    let subject = format!(
+        "Telephone rapport — {} {}",
+        contact.first_name, contact.last_name
+    );
+
+    // Build contact info line: ID, phone, mobile comma-separated
+    let mut info_parts: Vec<String> = Vec::new();
+    if let Some(ref id) = contact.customer_identifier {
+        info_parts.push(id.clone());
+    }
+    if let Some(ref phone) = contact.phone {
+        info_parts.push(phone.clone());
+    }
+    if let Some(ref mobile) = contact.mobile {
+        info_parts.push(mobile.clone());
+    }
+
+    let mut body = format!("Contact: {} {}", contact.first_name, contact.last_name);
+    if let Some(ref company) = contact.company_name {
+        body.push_str(&format!("\nCompany: {}", company));
+    }
+    if !info_parts.is_empty() {
+        body.push_str(&format!("\n{}", info_parts.join(", ")));
+    }
+    if let Some(ref email) = contact.email {
+        body.push_str(&format!("\n{}", email));
+    }
+    body.push_str(&format!("\n\nPlease Recall!\n{}", note.content));
+
+    // Build mailto URL — opens Outlook (or default mail client) with pre-filled email
+    let subject_enc = urlencoding::encode(&subject);
+    let body_enc = urlencoding::encode(&body);
+    let mailto = format!("mailto:{}?subject={}&body={}", to_email, subject_enc, body_enc);
+
+    app.shell()
+        .open(mailto, None)
+        .map_err(|e| format!("Failed to open mail client: {}", e))
+}
+
+#[tauri::command]
+pub async fn create_calendar_with_contact(
+    db: State<'_, Arc<Database>>,
+    graph: State<'_, GraphClient>,
+    note_id: i64,
+    due_at: String,
+) -> Result<String, String> {
+    let note = db.get_note(note_id).map_err(|e| e.to_string())?;
+
+    // Build title from contact name + identifier
+    let mut title = note.title.clone();
+    if let Some(ref contact) = note.contact {
+        let contact_name = if contact.kind == "company" && contact.company_name.is_some() {
+            contact.company_name.as_ref().unwrap().clone()
+        } else {
+            format!("{} {}", contact.first_name, contact.last_name)
+        };
+        title = if contact.customer_identifier.is_some() {
+            format!("{} ({})", contact_name, contact.customer_identifier.as_ref().unwrap())
+        } else {
+            contact_name
+        };
+    }
+
+    // Create calendar event with 1h duration
+    let event_id = graph
+        .create_event_with_duration(&title, &due_at, &note.content, 60)
+        .map_err(|e| e.to_string())?;
+
+    // Also set a reminder in the DB and link the calendar event
+    let reminder = db.set_reminder(note_id, &due_at).map_err(|e| e.to_string())?;
+    db.update_reminder_calendar_event(reminder.id, &event_id)
+        .map_err(|e| e.to_string())?;
+
+    Ok(event_id)
 }

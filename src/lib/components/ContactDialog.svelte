@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import * as api from '$lib/api';
   import type { Contact } from '$lib/api';
+  import { open, save } from '@tauri-apps/plugin-dialog';
 
   let { onClose } = $props<{ onClose: () => void }>();
 
@@ -10,6 +11,7 @@
   let editing = $state<Contact | null>(null);
   let isEditing = $state(false);
   let error = $state('');
+  let status = $state('');
 
   // Form fields
   let lastName = $state('');
@@ -20,6 +22,8 @@
   let kind = $state('private');
   let companyName = $state('');
   let customerIdentifier = $state('');
+  let phone = $state('');
+  let mobile = $state('');
 
   async function loadContacts() {
     try {
@@ -34,7 +38,6 @@
   }
 
   $effect(() => {
-    // Re-run when searchQuery changes (debounced)
     searchQuery;
     const timer = setTimeout(loadContacts, 200);
     return () => clearTimeout(timer);
@@ -53,6 +56,8 @@
     kind = 'private';
     companyName = '';
     customerIdentifier = '';
+    phone = '';
+    mobile = '';
   }
 
   function startEdit(c: Contact) {
@@ -66,6 +71,8 @@
     kind = c.kind;
     companyName = c.companyName ?? '';
     customerIdentifier = c.customerIdentifier ?? '';
+    phone = c.phone ?? '';
+    mobile = c.mobile ?? '';
   }
 
   function cancelEdit() {
@@ -88,6 +95,8 @@
       kind,
       companyName: companyName.trim() || null,
       customerIdentifier: customerIdentifier.trim() || null,
+      phone: phone.trim() || null,
+      mobile: mobile.trim() || null,
     };
     try {
       if (editing) {
@@ -98,6 +107,8 @@
       isEditing = false;
       editing = null;
       await loadContacts();
+      status = 'Saved';
+      setTimeout(() => (status = ''), 1500);
     } catch (e: any) {
       error = e?.message ?? String(e);
     }
@@ -108,6 +119,39 @@
     try {
       await api.deleteContact(c.id);
       await loadContacts();
+    } catch (e: any) {
+      error = e?.message ?? String(e);
+    }
+  }
+
+  async function handleExportCsv() {
+    try {
+      const filePath = await save({
+        defaultPath: 'contacts.csv',
+        filters: [{ name: 'CSV', extensions: ['csv'] }],
+      });
+      if (filePath) {
+        await api.exportContactsToFile(filePath);
+        status = `Exported to ${filePath}`;
+        setTimeout(() => (status = ''), 3000);
+      }
+    } catch (e: any) {
+      error = e?.message ?? String(e);
+    }
+  }
+
+  async function handleImportCsv() {
+    try {
+      const filePath = await open({
+        filters: [{ name: 'CSV', extensions: ['csv'] }],
+        multiple: false,
+      });
+      if (filePath && typeof filePath === 'string') {
+        const count = await api.importContactsFromFile(filePath);
+        await loadContacts();
+        status = `Imported ${count} contacts`;
+        setTimeout(() => (status = ''), 3000);
+      }
     } catch (e: any) {
       error = e?.message ?? String(e);
     }
@@ -143,6 +187,12 @@
         placeholder="Search…"
         class="text-xs bg-bg-muted rounded px-2 py-1 border border-border outline-none w-40"
       />
+      <button onclick={handleImportCsv} class="text-xs px-2 py-1 rounded bg-bg-muted hover:bg-border" title="Import CSV">
+        📥
+      </button>
+      <button onclick={handleExportCsv} class="text-xs px-2 py-1 rounded bg-bg-muted hover:bg-border" title="Export CSV">
+        📤
+      </button>
       <button onclick={startNew} class="text-xs px-3 py-1 rounded bg-accent text-accent-fg font-medium hover:opacity-90">
         + New
       </button>
@@ -151,6 +201,9 @@
 
     {#if error}
       <div class="px-4 py-1.5 text-xs text-red-500 bg-red-500/10">{error}</div>
+    {/if}
+    {#if status}
+      <div class="px-4 py-1.5 text-xs text-green-500 bg-green-500/10">{status}</div>
     {/if}
 
     {#if isEditing}
@@ -186,6 +239,17 @@
               <option value="diverse">Diverse</option>
               <option value="other">Other</option>
             </select>
+          </label>
+        </div>
+
+        <div class="flex gap-2">
+          <label class="flex-1 flex flex-col gap-1">
+            <span class="text-[10px] text-fg-muted">Phone</span>
+            <input bind:value={phone} class="text-sm bg-bg-muted rounded px-2 py-1.5 border border-border outline-none" />
+          </label>
+          <label class="flex-1 flex flex-col gap-1">
+            <span class="text-[10px] text-fg-muted">Mobile</span>
+            <input bind:value={mobile} class="text-sm bg-bg-muted rounded px-2 py-1.5 border border-border outline-none" />
           </label>
         </div>
 
@@ -229,17 +293,19 @@
       <div class="flex-1 overflow-y-auto">
         {#if contacts.length === 0}
           <div class="flex flex-col items-center justify-center h-full text-fg-muted text-xs py-8">
-            No contacts yet. Click "+ New" to add one.
+            No contacts yet. Click "+ New" to add one, or use 📥 to import a CSV.
           </div>
         {:else}
           {#each contacts as c (c.id)}
             <div class="flex items-center gap-2 px-4 py-2 border-b border-border hover:bg-bg-subtle">
               <div class="flex-1 min-w-0">
                 <div class="text-sm font-medium truncate">
-                  {kind === 'company' && c.companyName ? c.companyName : fullName(c)}
+                  {c.kind === 'company' && c.companyName ? c.companyName : fullName(c)}
                 </div>
                 <div class="text-[10px] text-fg-muted truncate">
                   {#if c.email}{c.email}{/if}
+                  {#if c.phone}· ☎ {c.phone}{/if}
+                  {#if c.mobile}· 📱 {c.mobile}{/if}
                   {#if c.companyName && c.kind === 'private'}· {c.companyName}{/if}
                   {#if c.customerIdentifier}· ID: {c.customerIdentifier}{/if}
                 </div>

@@ -9,6 +9,8 @@ export const selectedNoteId = writable<number | null>(null);
 export const searchQuery = writable('');
 export const activeTagFilter = writable<string | null>(null);
 export const activeCategoryFilter = writable<number | null>(null);
+export const timeRangeSort = writable<'newest' | 'oldest' | 'today' | 'week'>('newest');
+export const filteredNotes = writable<Note[]>([]);
 export const isLoading = writable(false);
 export const lastError = writable<string | null>(null);
 

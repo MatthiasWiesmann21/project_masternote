@@ -23,16 +23,16 @@ impl Database {
     pub fn run_migrations(&self) -> Result<(), Box<dyn std::error::Error>> {
         let sql1 = include_str!("../migrations/0001_init.sql");
         let sql2 = include_str!("../migrations/0002_contacts_coworkers.sql");
+        let sql3 = include_str!("../migrations/0003_contact_phones.sql");
         let conn = self.conn.lock().unwrap();
         conn.execute_batch(sql1)?;
-        // v2 uses ALTER TABLE which can fail if column already exists — ignore that case
-        for stmt in sql2.split(';') {
+        // v2 and v3 use ALTER TABLE which can fail if column already exists — ignore that case
+        for stmt in sql2.split(';').chain(sql3.split(';')) {
             let trimmed = stmt.trim();
             if trimmed.is_empty() {
                 continue;
             }
             if let Err(e) = conn.execute(trimmed, []) {
-                // "duplicate column name" is expected on re-run
                 let msg = e.to_string();
                 if !msg.contains("duplicate column name") {
                     return Err(Box::new(e));
@@ -86,7 +86,7 @@ impl Database {
     fn fetch_contact(conn: &Connection, contact_id: Option<i64>) -> Result<Option<Contact>, rusqlite::Error> {
         if let Some(cid) = contact_id {
             conn.query_row(
-                "SELECT id, last_name, first_name, address, email, gender, kind, company_name, customer_identifier, created_at, updated_at
+                "SELECT id, last_name, first_name, address, email, gender, kind, company_name, customer_identifier, phone, mobile, created_at, updated_at
                  FROM contacts WHERE id = ?1",
                 params![cid],
                 Self::row_to_contact,
@@ -122,8 +122,10 @@ impl Database {
             kind: row.get(6)?,
             company_name: row.get(7)?,
             customer_identifier: row.get(8)?,
-            created_at: row.get(9)?,
-            updated_at: row.get(10)?,
+            phone: row.get(9)?,
+            mobile: row.get(10)?,
+            created_at: row.get(11)?,
+            updated_at: row.get(12)?,
         })
     }
 
@@ -492,7 +494,7 @@ impl Database {
     pub fn list_contacts(&self) -> Result<Vec<Contact>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, last_name, first_name, address, email, gender, kind, company_name, customer_identifier, created_at, updated_at
+            "SELECT id, last_name, first_name, address, email, gender, kind, company_name, customer_identifier, phone, mobile, created_at, updated_at
              FROM contacts ORDER BY last_name, first_name",
         )?;
         let contacts = stmt
@@ -505,9 +507,9 @@ impl Database {
         let pattern = format!("%{}%", query);
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, last_name, first_name, address, email, gender, kind, company_name, customer_identifier, created_at, updated_at
+            "SELECT id, last_name, first_name, address, email, gender, kind, company_name, customer_identifier, phone, mobile, created_at, updated_at
              FROM contacts
-             WHERE last_name LIKE ?1 OR first_name LIKE ?1 OR email LIKE ?1 OR company_name LIKE ?1 OR customer_identifier LIKE ?1
+             WHERE last_name LIKE ?1 OR first_name LIKE ?1 OR email LIKE ?1 OR company_name LIKE ?1 OR customer_identifier LIKE ?1 OR phone LIKE ?1 OR mobile LIKE ?1
              ORDER BY last_name, first_name
              LIMIT 50",
         )?;
@@ -521,13 +523,13 @@ impl Database {
         let now = Self::now_iso();
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO contacts (last_name, first_name, address, email, gender, kind, company_name, customer_identifier, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
-            params![c.last_name, c.first_name, c.address, c.email, c.gender, c.kind, c.company_name, c.customer_identifier, now],
+            "INSERT INTO contacts (last_name, first_name, address, email, gender, kind, company_name, customer_identifier, phone, mobile, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+            params![c.last_name, c.first_name, c.address, c.email, c.gender, c.kind, c.company_name, c.customer_identifier, c.phone, c.mobile, now],
         )?;
         let id = conn.last_insert_rowid();
         conn.query_row(
-            "SELECT id, last_name, first_name, address, email, gender, kind, company_name, customer_identifier, created_at, updated_at
+            "SELECT id, last_name, first_name, address, email, gender, kind, company_name, customer_identifier, phone, mobile, created_at, updated_at
              FROM contacts WHERE id = ?1",
             params![id],
             Self::row_to_contact,
@@ -538,12 +540,12 @@ impl Database {
         let now = Self::now_iso();
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE contacts SET last_name=?1, first_name=?2, address=?3, email=?4, gender=?5, kind=?6, company_name=?7, customer_identifier=?8, updated_at=?9
-             WHERE id=?10",
-            params![c.last_name, c.first_name, c.address, c.email, c.gender, c.kind, c.company_name, c.customer_identifier, now, id],
+            "UPDATE contacts SET last_name=?1, first_name=?2, address=?3, email=?4, gender=?5, kind=?6, company_name=?7, customer_identifier=?8, phone=?9, mobile=?10, updated_at=?11
+             WHERE id=?12",
+            params![c.last_name, c.first_name, c.address, c.email, c.gender, c.kind, c.company_name, c.customer_identifier, c.phone, c.mobile, now, id],
         )?;
         conn.query_row(
-            "SELECT id, last_name, first_name, address, email, gender, kind, company_name, customer_identifier, created_at, updated_at
+            "SELECT id, last_name, first_name, address, email, gender, kind, company_name, customer_identifier, phone, mobile, created_at, updated_at
              FROM contacts WHERE id = ?1",
             params![id],
             Self::row_to_contact,
@@ -636,6 +638,8 @@ pub struct ContactInput {
     pub kind: String,
     pub company_name: Option<String>,
     pub customer_identifier: Option<String>,
+    pub phone: Option<String>,
+    pub mobile: Option<String>,
 }
 
 pub struct CoworkerInput {

@@ -41,6 +41,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Open database in user data dir
             let data_dir = dirs::data_dir()
@@ -120,6 +121,8 @@ pub fn run() {
             commands::graph_sign_in,
             commands::graph_sign_out,
             commands::graph_is_signed_in,
+            commands::get_graph_client_id,
+            commands::set_graph_client_id,
             commands::hide_widget,
             commands::get_hotkeys,
             commands::set_open_hotkey,
@@ -134,6 +137,12 @@ pub fn run() {
             commands::create_coworker,
             commands::update_coworker,
             commands::delete_coworker,
+            commands::export_contacts_csv,
+            commands::export_contacts_to_file,
+            commands::import_contacts_csv,
+            commands::import_contacts_from_file,
+            commands::open_telephone_rapport,
+            commands::create_calendar_with_contact,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,11 +1,12 @@
 <script lang="ts">
-  import type { Note } from '$lib/api';
+  import type { Note, Coworker } from '$lib/api';
   import * as api from '$lib/api';
-  import { categories, saveNote, selectedNoteId, removeNote } from '$lib/stores/notes';
+  import { categories, saveNote, selectedNoteId, removeNote, notes } from '$lib/stores/notes';
   import TagPicker from './TagPicker.svelte';
   import ReminderDialog from './ReminderDialog.svelte';
   import ContactPicker from './ContactPicker.svelte';
   import CoworkerPicker from './CoworkerPicker.svelte';
+  import CategoryPicker from './CategoryPicker.svelte';
 
   let note = $state<Note | null>(null);
   let title = $state('');
@@ -17,11 +18,24 @@
   let showReminder = $state(false);
   let saveStatus = $state('');
   let errorMsg = $state('');
+  let showRapportDialog = $state(false);
+  let showCalendarDialog = $state(false);
+  let showDeleteConfirm = $state(false);
+  let showCopyConfirm = $state(false);
+  let copyStatus = $state('');
+  let rapportCoworkerQuery = $state('');
+  let rapportCoworkerResults = $state<Coworker[]>([]);
+  let rapportCoworker = $state<Coworker | null>(null);
+  let calendarDate = $state('');
+  let calendarTime = $state('12:00');
+  let graphStatus = $state('');
 
   // Element refs for keyboard shortcuts
   let titleEl = $state<HTMLInputElement | null>(null);
   let textareaEl = $state<HTMLTextAreaElement | null>(null);
-  let categoryEl = $state<HTMLSelectElement | null>(null);
+  let contactPickerEl = $state<any>(null);
+  let coworkerPickerEl = $state<any>(null);
+  let categoryPickerEl = $state<any>(null);
 
   export function loadNote(n: Note | null) {
     note = n;
@@ -93,6 +107,81 @@
     }
   }
 
+  async function handleCopy() {
+    if (!note) return;
+    try {
+      const copied = await api.createNote(
+        note.title ? `${note.title} (copy)` : '(copy)',
+        note.content,
+        note.categoryId,
+        note.contactId,
+        note.coworkerId
+      );
+      copyStatus = 'Copied';
+      setTimeout(() => (copyStatus = ''), 2000);
+      showCopyConfirm = false;
+      selectedNoteId.set(copied.id);
+      loadNote(copied);
+    } catch (e: any) {
+      errorMsg = e?.message ?? String(e);
+    }
+  }
+
+  async function searchRapportCoworkers() {
+    if (rapportCoworkerQuery.trim().length < 1) {
+      rapportCoworkerResults = [];
+      return;
+    }
+    try {
+      rapportCoworkerResults = await api.searchCoworkers(rapportCoworkerQuery.trim());
+    } catch {
+      rapportCoworkerResults = [];
+    }
+  }
+
+  $effect(() => {
+    rapportCoworkerQuery;
+    const timer = setTimeout(searchRapportCoworkers, 150);
+    return () => clearTimeout(timer);
+  });
+
+  function pickRapportCoworker(c: Coworker) {
+    rapportCoworker = c;
+    rapportCoworkerQuery = '';
+    rapportCoworkerResults = [];
+  }
+
+  async function handleOpenRapport() {
+    if (!note || !rapportCoworker?.email) return;
+    graphStatus = 'Opening Outlook…';
+    try {
+      await api.openTelephoneRapport(note.id, rapportCoworker.email);
+      graphStatus = 'Outlook opened';
+      showRapportDialog = false;
+      rapportCoworker = null;
+      rapportCoworkerQuery = '';
+      setTimeout(() => (graphStatus = ''), 3000);
+    } catch (e: any) {
+      graphStatus = '';
+      errorMsg = e?.message ?? String(e);
+    }
+  }
+
+  async function handleCreateCalendar() {
+    if (!note) return;
+    graphStatus = 'Creating event…';
+    const iso = `${calendarDate}T${calendarTime}:00`;
+    try {
+      await api.createCalendarWithContact(note.id, iso);
+      graphStatus = 'Calendar entry created (1h)';
+      showCalendarDialog = false;
+      setTimeout(() => (graphStatus = ''), 3000);
+    } catch (e: any) {
+      graphStatus = '';
+      errorMsg = e?.message ?? String(e);
+    }
+  }
+
   function onKeydown(e: KeyboardEvent) {
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.shiftKey && e.key.toLowerCase() === 't') {
@@ -106,7 +195,15 @@
     }
     if (mod && e.shiftKey && e.key.toLowerCase() === 'c') {
       e.preventDefault();
-      categoryEl?.focus();
+      categoryPickerEl?.focusSearch();
+    }
+    if (mod && e.shiftKey && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      contactPickerEl?.focusSearch();
+    }
+    if (mod && e.shiftKey && e.key.toLowerCase() === 'h') {
+      e.preventDefault();
+      coworkerPickerEl?.focusSearch();
     }
     if (mod && e.key === 's') {
       e.preventDefault();
@@ -119,6 +216,18 @@
     if (mod && e.key === 'n') {
       e.preventDefault();
       newNote();
+    }
+    if (mod && e.shiftKey && e.key === 'Tab') {
+      e.preventDefault();
+      // Select next note in the list
+      const allNotes = $notes;
+      if (allNotes.length === 0) return;
+      const currentId = $selectedNoteId;
+      const currentIdx = currentId !== null ? allNotes.findIndex((n) => n.id === currentId) : -1;
+      const nextIdx = (currentIdx + 1) % allNotes.length;
+      const nextNote = allNotes[nextIdx];
+      selectedNoteId.set(nextNote.id);
+      loadNote(nextNote);
     }
   }
 
@@ -139,30 +248,24 @@
       placeholder="Note title…"
       class="flex-1 bg-transparent text-sm font-medium outline-none placeholder:text-fg-muted"
     />
-    <select
-      bind:this={categoryEl}
-      bind:value={categoryId}
-      onchange={scheduleAutosave}
-      class="text-xs bg-bg-muted rounded px-2 py-1 border border-border outline-none cursor-pointer"
-    >
-      <option value={null}>No category</option>
-      {#each $categories as cat}
-        <option value={cat.id}>{cat.name}</option>
-      {/each}
-    </select>
+    <CategoryPicker
+      bind:this={categoryPickerEl}
+      selectedId={categoryId}
+      onSelect={(id) => { categoryId = id; scheduleAutosave(); }}
+    />
   </div>
 
   <!-- Contact + Coworker pickers -->
   <div class="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-bg-subtle">
-    <ContactPicker selectedId={contactId} onSelect={(id) => { contactId = id; scheduleAutosave(); }} />
-    <CoworkerPicker selectedId={coworkerId} onSelect={(id) => { coworkerId = id; scheduleAutosave(); }} />
+    <ContactPicker bind:this={contactPickerEl} selectedId={contactId} onSelect={(id) => { contactId = id; scheduleAutosave(); }} />
+    <CoworkerPicker bind:this={coworkerPickerEl} selectedId={coworkerId} onSelect={(id) => { coworkerId = id; scheduleAutosave(); }} />
   </div>
 
   <textarea
     bind:this={textareaEl}
     bind:value={content}
     oninput={scheduleAutosave}
-    placeholder="Write what you hear…  (Ctrl+S save, Ctrl+N new, Ctrl+Shift+T title, Ctrl+Shift+D description, Ctrl+Shift+C category)"
+    placeholder="Write what you hear…  (Ctrl+S save, Ctrl+N new, Ctrl+Shift+T title, Ctrl+Shift+D desc, Ctrl+Shift+C cat, Ctrl+Shift+K contact, Ctrl+Shift+H coworker)"
     class="flex-1 w-full resize-none bg-transparent p-3 text-sm leading-relaxed outline-none placeholder:text-fg-muted font-mono"
   ></textarea>
 
@@ -198,9 +301,42 @@
       >
         Reminder
       </button>
+      {#if contactId}
+        <button
+          onclick={() => {
+            rapportCoworker = null;
+            rapportCoworkerQuery = '';
+            rapportCoworkerResults = [];
+            showRapportDialog = true;
+          }}
+          class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
+          title="Open Outlook with telephone rapport"
+        >
+          📧 Rapport
+        </button>
+        <button
+          onclick={() => {
+            const now = new Date();
+            calendarDate = now.toISOString().slice(0, 10);
+            calendarTime = `${String(now.getHours()).padStart(2, '0')}:00`;
+            showCalendarDialog = true;
+          }}
+          class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
+          title="Create Outlook calendar entry with contact"
+        >
+          📅 Calendar
+        </button>
+      {/if}
       <button
-        onclick={handleDelete}
-        class="text-xs px-3 py-1.5 rounded text-red-500 hover:bg-red-500/10 transition ml-auto"
+        onclick={() => (showCopyConfirm = true)}
+        class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition ml-auto"
+        title="Duplicate this note"
+      >
+        📋 Copy
+      </button>
+      <button
+        onclick={() => (showDeleteConfirm = true)}
+        class="text-xs px-3 py-1.5 rounded text-red-500 hover:bg-red-500/10 transition"
       >
         Delete
       </button>
@@ -208,9 +344,194 @@
     {#if saveStatus}
       <span class="text-[10px] text-green-500 ml-auto">{saveStatus}</span>
     {/if}
+    {#if graphStatus}
+      <span class="text-[10px] text-blue-500 ml-auto">{graphStatus}</span>
+    {/if}
   </div>
 </div>
 
+{#if showRapportDialog && note}
+  <div
+    class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+    role="button"
+    tabindex="-1"
+    onclick={() => (showRapportDialog = false)}
+    onkeydown={(e) => { if (e.key === 'Escape') showRapportDialog = false; }}
+  >
+    <div
+      class="bg-bg rounded-lg shadow-2xl border border-border w-[400px] p-4 space-y-3"
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+    >
+      <h3 class="text-sm font-semibold">📧 Telephone Rapport</h3>
+
+      {#if rapportCoworker}
+        <div class="flex items-center gap-1.5 text-xs">
+          <span class="px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-600 whitespace-nowrap">
+            🤝 {[rapportCoworker.firstName, rapportCoworker.lastName].filter(Boolean).join(' ')}
+          </span>
+          <span class="text-fg-muted">{rapportCoworker.email}</span>
+          <button
+            onclick={() => { rapportCoworker = null; }}
+            class="text-fg-muted hover:text-red-500 text-[10px]"
+          >✕ change</button>
+        </div>
+      {:else}
+        <div class="relative">
+          <input
+            bind:value={rapportCoworkerQuery}
+            placeholder="Search coworker to send to…"
+            class="text-xs bg-bg-muted rounded px-2 py-1.5 border border-border outline-none w-full"
+          />
+          {#if rapportCoworkerResults.length > 0}
+            <div class="absolute top-full left-0 right-0 mt-1 bg-bg rounded-lg border border-border shadow-lg max-h-48 overflow-y-auto z-50">
+              {#each rapportCoworkerResults as c (c.id)}
+                <button
+                  onmousedown={() => pickRapportCoworker(c)}
+                  class="w-full text-left px-2 py-1.5 hover:bg-bg-subtle text-xs border-b border-border last:border-0"
+                >
+                  <div class="font-medium">{[c.firstName, c.lastName].filter(Boolean).join(' ')}</div>
+                  {#if c.email}
+                    <div class="text-[10px] text-fg-muted">{c.email}</div>
+                  {/if}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
+
+      <p class="text-[10px] text-fg-muted">
+        Opens Outlook with a pre-filled email containing the contact's phone/mobile, name, customer ID, and your note. You can review and send manually.
+      </p>
+
+      {#if errorMsg}
+        <div class="text-xs text-red-500">{errorMsg}</div>
+      {/if}
+
+      <div class="flex gap-2 justify-end">
+        <button onclick={() => (showRapportDialog = false)} class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border">Cancel</button>
+        <button
+          onclick={handleOpenRapport}
+          disabled={!rapportCoworker?.email}
+          class="text-xs px-3 py-1.5 rounded bg-accent text-accent-fg font-medium hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Open Outlook
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showCalendarDialog && note}
+  <div
+    class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+    role="dialog"
+    aria-modal="true"
+    tabindex="-1"
+    onclick={() => (showCalendarDialog = false)}
+    onkeydown={(e) => { if (e.key === 'Escape') showCalendarDialog = false; }}
+  >
+    <div
+      class="bg-bg rounded-lg shadow-2xl border border-border w-[400px] p-4 space-y-3"
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+    >
+      <h3 class="text-sm font-semibold">📅 Create Calendar Entry</h3>
+      <p class="text-[10px] text-fg-muted">
+        Title: contact name + customer ID. Description: your note. Duration: 1 hour.
+      </p>
+      <div class="flex gap-2">
+        <label class="flex-1 flex flex-col gap-1">
+          <span class="text-[10px] text-fg-muted">Date</span>
+          <input
+            bind:value={calendarDate}
+            type="date"
+            class="text-sm bg-bg-muted rounded px-2 py-1.5 border border-border outline-none"
+          />
+        </label>
+        <label class="flex-1 flex flex-col gap-1">
+          <span class="text-[10px] text-fg-muted">Time</span>
+          <input
+            bind:value={calendarTime}
+            type="time"
+            class="text-sm bg-bg-muted rounded px-2 py-1.5 border border-border outline-none"
+          />
+        </label>
+      </div>
+      {#if errorMsg}
+        <div class="text-xs text-red-500">{errorMsg}</div>
+      {/if}
+      <div class="flex gap-2 justify-end">
+        <button onclick={() => (showCalendarDialog = false)} class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border">Cancel</button>
+        <button onclick={handleCreateCalendar} class="text-xs px-3 py-1.5 rounded bg-accent text-accent-fg font-medium hover:opacity-90">Create</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 {#if showReminder && note}
   <ReminderDialog noteId={note.id} onClose={() => (showReminder = false)} />
+{/if}
+
+{#if showCopyConfirm && note}
+  <div
+    class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+    role="button"
+    tabindex="-1"
+    onclick={() => (showCopyConfirm = false)}
+    onkeydown={(e) => { if (e.key === 'Escape') showCopyConfirm = false; }}
+  >
+    <div
+      class="bg-bg rounded-lg shadow-2xl border border-border w-[360px] p-4 space-y-3"
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+    >
+      <h3 class="text-sm font-semibold">📋 Duplicate Note</h3>
+      <p class="text-xs text-fg-muted">
+        Create a copy of "{note.title || 'Untitled'}" with the same content, category, contact, and coworker?
+      </p>
+      <div class="flex gap-2 justify-end">
+        <button onclick={() => (showCopyConfirm = false)} class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border">Cancel</button>
+        <button onclick={handleCopy} class="text-xs px-3 py-1.5 rounded bg-accent text-accent-fg font-medium hover:opacity-90">Copy</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showDeleteConfirm && note}
+  <div
+    class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+    role="button"
+    tabindex="-1"
+    onclick={() => (showDeleteConfirm = false)}
+    onkeydown={(e) => { if (e.key === 'Escape') showDeleteConfirm = false; }}
+  >
+    <div
+      class="bg-bg rounded-lg shadow-2xl border border-border w-[360px] p-4 space-y-3"
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+    >
+      <h3 class="text-sm font-semibold text-red-500">🗑 Delete Note</h3>
+      <p class="text-xs text-fg-muted">
+        Delete "{note.title || 'Untitled'}"? This cannot be undone.
+      </p>
+      <div class="flex gap-2 justify-end">
+        <button onclick={() => (showDeleteConfirm = false)} class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border">Cancel</button>
+        <button onclick={handleDelete} class="text-xs px-3 py-1.5 rounded bg-red-500 text-white font-medium hover:opacity-90">Delete</button>
+      </div>
+    </div>
+  </div>
 {/if}

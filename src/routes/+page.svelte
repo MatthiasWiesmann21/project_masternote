@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { writable } from 'svelte/store';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import NoteEditor from '$lib/components/NoteEditor.svelte';
   import NoteList from '$lib/components/NoteList.svelte';
@@ -16,10 +17,13 @@
     activeCategoryFilter,
     tags,
     categories,
+    timeRangeSort,
     lastError
   } from '$lib/stores/notes';
   import { settings } from '$lib/stores/settings';
   import * as api from '$lib/api';
+
+  export const showFilterDropdown = writable(false);
 
   let editor = $state<NoteEditor>();
   let searchBar = $state<SearchBar>();
@@ -73,11 +77,22 @@
   }
 
   let unlistenSaveClose: UnlistenFn | null = null;
+  let unlistenDeviceCode: UnlistenFn | null = null;
+  let deviceCodeMsg = $state('');
+  let graphClientId = $state('');
+  let graphClientIdSaved = $state('');
 
   onMount(async () => {
     window.addEventListener('select-search-result', handleSearchResult);
     // Listen for save-and-close event from backend (global hotkey)
     unlistenSaveClose = await listen('save-and-close', handleSaveAndClose);
+    // Listen for Graph device code during sign-in
+    unlistenDeviceCode = await listen<{ message: string; user_code: string; verification_uri: string }>(
+      'graph-device-code',
+      (e) => {
+        deviceCodeMsg = e.payload.message;
+      }
+    );
     // Load hotkey config
     try {
       const config = await api.getHotkeys();
@@ -86,6 +101,12 @@
     } catch (e) {
       console.error('Failed to load hotkeys:', e);
     }
+    // Load Graph client ID
+    try {
+      graphClientId = await api.getGraphClientId();
+    } catch (e) {
+      console.error('Failed to load Graph client ID:', e);
+    }
     await refreshAll();
     newNoteAndFocus();
   });
@@ -93,6 +114,7 @@
   onDestroy(() => {
     window.removeEventListener('select-search-result', handleSearchResult);
     unlistenSaveClose?.();
+    unlistenDeviceCode?.();
   });
 
   function toggleTagFilter(tagName: string) {
@@ -117,11 +139,25 @@
   }
 
   async function signInGraph() {
+    deviceCodeMsg = '';
     try {
-      await api.graphSignIn();
-      settings.update((s) => ({ ...s, graphSignedIn: true }));
-    } catch (e) {
-      console.error('Graph sign in failed:', e);
+      const ok = await api.graphSignIn();
+      if (ok) {
+        settings.update((s) => ({ ...s, graphSignedIn: true }));
+        deviceCodeMsg = '';
+      }
+    } catch (e: any) {
+      deviceCodeMsg = e?.message ?? String(e);
+    }
+  }
+
+  async function saveGraphClientId() {
+    try {
+      await api.setGraphClientId(graphClientId);
+      graphClientIdSaved = 'Client ID saved';
+      setTimeout(() => (graphClientIdSaved = ''), 1500);
+    } catch (e: any) {
+      deviceCodeMsg = e?.message ?? String(e);
     }
   }
 
@@ -182,7 +218,7 @@
       📁
     </button>
     <button onclick={() => (showContactDialog = true)} class="text-fg-muted hover:text-fg text-xs px-1" title="Manage contacts">
-      �
+      👤
     </button>
     <button onclick={() => (showCoworkerDialog = true)} class="text-fg-muted hover:text-fg text-xs px-1" title="Manage coworkers">
       🤝
@@ -285,34 +321,91 @@
           <button onclick={signInGraph} class="px-2 py-1 rounded bg-accent text-accent-fg hover:opacity-90">Sign in</button>
         {/if}
       </div>
-    </div>
-  {/if}
-
-  <!-- Filter chips -->
-  {#if $tags.length > 0 || $categories.length > 0}
-    <div class="flex items-center gap-1 px-3 py-1 border-b border-border bg-bg-subtle overflow-x-auto">
-      {#each $categories as cat}
-        <button
-          onclick={() => toggleCategoryFilter(cat.id)}
-          class="text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap transition {$activeCategoryFilter === cat.id ? 'text-white' : 'opacity-60 hover:opacity-100'}"
-          style="background: {cat.color}"
-        >
-          {cat.name}
-        </button>
-      {/each}
-      {#each $tags as tag}
-        <button
-          onclick={() => toggleTagFilter(tag.name)}
-          class="text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap transition {$activeTagFilter === tag.name ? 'bg-accent text-accent-fg' : 'bg-bg-muted text-fg-muted hover:bg-border'}"
-        >
-          #{tag.name}
-        </button>
-      {/each}
-      {#if hasFilters}
-        <button onclick={clearFilters} class="text-[10px] px-1.5 py-0.5 text-fg-muted hover:text-fg">clear</button>
+      <div class="flex items-center gap-2">
+        <span class="text-fg-muted w-28">Client ID</span>
+        <input
+          bind:value={graphClientId}
+          placeholder="Azure app client ID"
+          class="flex-1 text-xs bg-bg-muted rounded px-2 py-1 border border-border outline-none"
+        />
+        <button onclick={saveGraphClientId} class="text-xs px-2 py-1 rounded bg-bg-muted hover:bg-border">Save</button>
+      </div>
+      {#if graphClientIdSaved}
+        <div class="text-[10px] text-green-500 pl-28">{graphClientIdSaved}</div>
+      {/if}
+      {#if deviceCodeMsg}
+        <div class="text-[10px] text-blue-500 pl-28 whitespace-pre-wrap">{deviceCodeMsg}</div>
       {/if}
     </div>
   {/if}
+
+  <!-- Filter button + dropdown -->
+  <div class="relative px-3 py-1 border-b border-border bg-bg-subtle">
+    <button
+      onclick={() => showFilterDropdown.update((v) => !v)}
+      class="text-[10px] px-2 py-0.5 rounded-full bg-bg-muted hover:bg-border transition flex items-center gap-1"
+    >
+      🔍 Filter
+      {#if hasFilters}
+        <span class="text-accent">●</span>
+      {/if}
+    </button>
+    {#if hasFilters}
+      <button onclick={clearFilters} class="text-[10px] px-1.5 text-fg-muted hover:text-fg ml-1">clear</button>
+    {/if}
+
+    {#if $showFilterDropdown}
+      <div class="absolute top-full left-3 mt-1 bg-bg rounded-lg border border-border shadow-lg p-3 z-50 w-72 max-h-72 overflow-y-auto">
+        <!-- Time range -->
+        <div class="mb-2">
+          <div class="text-[10px] text-fg-muted mb-1 font-medium">Sort by time</div>
+          <div class="flex gap-1 flex-wrap">
+            {#each ['newest', 'oldest', 'today', 'week'] as option}
+              <button
+                onclick={() => timeRangeSort.set(option as any)}
+                class="text-[10px] px-2 py-0.5 rounded-full {$timeRangeSort === option ? 'bg-accent text-accent-fg' : 'bg-bg-muted hover:bg-border'}"
+              >
+                {option === 'newest' ? 'Newest' : option === 'oldest' ? 'Oldest' : option === 'today' ? 'Today' : 'This week'}
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        {#if $categories.length > 0}
+          <div class="mb-2">
+            <div class="text-[10px] text-fg-muted mb-1 font-medium">Categories</div>
+            <div class="flex gap-1 flex-wrap">
+              {#each $categories as cat}
+                <button
+                  onclick={() => toggleCategoryFilter(cat.id)}
+                  class="text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap transition {$activeCategoryFilter === cat.id ? 'text-white' : 'opacity-60 hover:opacity-100'}"
+                  style="background: {cat.color}"
+                >
+                  {cat.name}
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+
+        {#if $tags.length > 0}
+          <div>
+            <div class="text-[10px] text-fg-muted mb-1 font-medium">Tags</div>
+            <div class="flex gap-1 flex-wrap">
+              {#each $tags as tag}
+                <button
+                  onclick={() => toggleTagFilter(tag.name)}
+                  class="text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap transition {$activeTagFilter === tag.name ? 'bg-accent text-accent-fg' : 'bg-bg-muted text-fg-muted hover:bg-border'}"
+                >
+                  #{tag.name}
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      </div>
+    {/if}
+  </div>
 
   <!-- Main content: sidebar + editor -->
   <div class="flex flex-1 overflow-hidden">
