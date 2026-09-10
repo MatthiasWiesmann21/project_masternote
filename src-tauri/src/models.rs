@@ -18,6 +18,17 @@ pub struct Note {
     pub coworker_id: Option<i64>,
     pub contact: Option<Contact>,
     pub coworker: Option<Coworker>,
+    pub archived: bool,
+    pub sort_order: i64,
+    pub links: Vec<NoteLink>,
+    pub backlinks: Vec<NoteLink>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteLink {
+    pub id: i64,
+    pub title: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +54,8 @@ pub struct Reminder {
     pub due_at: String,
     pub fired: bool,
     pub calendar_event_id: Option<String>,
+    pub recur_interval: Option<i64>,
+    pub recur_unit: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,4 +95,45 @@ pub struct Coworker {
     pub email: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteTemplate {
+    pub id: i64,
+    pub name: String,
+    pub title: String,
+    pub content: String,
+    pub category_id: Option<i64>,
+    pub tags: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedSearch {
+    pub id: i64,
+    pub name: String,
+    pub query: String,
+    pub category_id: Option<i64>,
+    pub tag_name: Option<String>,
+    pub time_range: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteStatistics {
+    pub total_notes: i64,
+    pub archived_notes: i64,
+    pub notes_with_reminders: i64,
+    pub total_contacts: i64,
+    pub total_coworkers: i64,
+    pub notes_this_week: i64,
+    pub notes_per_category: Vec<CategoryCount>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CategoryCount {
+    pub name: String,
+    pub count: i64,
 }

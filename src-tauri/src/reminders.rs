@@ -58,7 +58,12 @@ fn check_and_fire_reminders(app: &AppHandle, db: &Database) {
                     log::warn!("Failed to show notification: {}", e);
                 }
 
-                if let Err(e) = db.mark_reminder_fired(reminder.id) {
+                // If recurring, re-arm with next due time; otherwise mark as fired
+                if reminder.recur_interval.is_some() && reminder.recur_unit.is_some() {
+                    if let Err(e) = db.rearm_recurring_reminder(reminder.id) {
+                        log::warn!("Failed to rearm recurring reminder: {}", e);
+                    }
+                } else if let Err(e) = db.mark_reminder_fired(reminder.id) {
                     log::warn!("Failed to mark reminder as fired: {}", e);
                 }
             }

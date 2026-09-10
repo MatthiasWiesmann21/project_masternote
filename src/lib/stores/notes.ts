@@ -13,6 +13,8 @@ export const timeRangeSort = writable<'newest' | 'oldest' | 'today' | 'week'>('n
 export const filteredNotes = writable<Note[]>([]);
 export const isLoading = writable(false);
 export const lastError = writable<string | null>(null);
+export const showArchived = writable(false);
+export const selectedNoteIds = writable<Set<number>>(new Set());
 
 export async function loadNotes() {
   isLoading.set(true);

@@ -16,6 +16,15 @@ export interface Note {
   coworkerId: number | null;
   contact: Contact | null;
   coworker: Coworker | null;
+  archived: boolean;
+  sortOrder: number;
+  links: NoteLink[];
+  backlinks: NoteLink[];
+}
+
+export interface NoteLink {
+  id: number;
+  title: string;
 }
 
 export interface Tag {
@@ -35,6 +44,8 @@ export interface Reminder {
   dueAt: string;
   fired: boolean;
   calendarEventId: string | null;
+  recurInterval: number | null;
+  recurUnit: string | null;
 }
 
 export interface SearchResult {
@@ -114,8 +125,20 @@ export const createCategory = (name: string, color: string) =>
   invoke<Category>('create_category', { name, color });
 
 // Reminder commands
-export const setReminder = (noteId: number, dueAt: string, createCalendarEvent: boolean) =>
-  invoke<Reminder>('set_reminder', { noteId, dueAt, createCalendarEvent });
+export const setReminder = (
+  noteId: number,
+  dueAt: string,
+  createCalendarEvent: boolean,
+  recurInterval: number | null = null,
+  recurUnit: string | null = null
+) =>
+  invoke<Reminder>('set_reminder', {
+    noteId,
+    dueAt,
+    createCalendarEvent,
+    recurInterval,
+    recurUnit
+  });
 
 export const deleteReminder = (noteId: number) => invoke<void>('delete_reminder', { noteId });
 
@@ -138,6 +161,7 @@ export const hideWidget = () => invoke<void>('hide_widget');
 export interface HotkeyConfig {
   open: string;
   saveClose: string;
+  quickCapture: string;
 }
 
 export const getHotkeys = () => invoke<HotkeyConfig>('get_hotkeys');
@@ -147,6 +171,9 @@ export const setOpenHotkey = (hotkey: string) =>
 
 export const setSaveCloseHotkey = (hotkey: string) =>
   invoke<void>('set_save_close_hotkey', { hotkey });
+
+export const setQuickCaptureHotkey = (hotkey: string) =>
+  invoke<void>('set_quick_capture_hotkey', { hotkey });
 
 // Contact commands
 export const listContacts = () => invoke<Contact[]>('list_contacts');
@@ -194,3 +221,112 @@ export const openTelephoneRapport = (noteId: number, toEmail: string) =>
 
 export const createCalendarWithContact = (noteId: number, dueAt: string) =>
   invoke<string>('create_calendar_with_contact', { noteId, dueAt });
+
+// Calendar event management
+export const deleteCalendarEvent = (noteId: number) =>
+  invoke<void>('delete_calendar_event', { noteId });
+
+export const updateCalendarEvent = (noteId: number, dueAt: string) =>
+  invoke<void>('update_calendar_event', { noteId, dueAt });
+
+// Archive
+export const archiveNote = (id: number) => invoke<void>('archive_note', { id });
+export const unarchiveNote = (id: number) => invoke<void>('unarchive_note', { id });
+
+// Reorder
+export const reorderNote = (id: number, sortOrder: number) =>
+  invoke<void>('reorder_note', { id, sortOrder });
+
+// Note links
+export const linkNotes = (fromId: number, toId: number) =>
+  invoke<void>('link_notes', { fromId, toId });
+export const unlinkNotes = (fromId: number, toId: number) =>
+  invoke<void>('unlink_notes', { fromId, toId });
+
+// Recent contacts/coworkers
+export const recentContacts = (limit: number = 5) =>
+  invoke<Contact[]>('recent_contacts', { limit });
+export const recentCoworkers = (limit: number = 5) =>
+  invoke<Coworker[]>('recent_coworkers', { limit });
+
+// Contact note history
+export const listNotesForContact = (contactId: number) =>
+  invoke<Note[]>('list_notes_for_contact', { contactId });
+
+// Note templates
+export interface NoteTemplate {
+  id: number;
+  name: string;
+  title: string;
+  content: string;
+  categoryId: number | null;
+  tags: string;
+}
+
+export const listTemplates = () => invoke<NoteTemplate[]>('list_templates');
+export const createTemplate = (
+  name: string,
+  title: string,
+  content: string,
+  categoryId: number | null,
+  tags: string
+) => invoke<NoteTemplate>('create_template', { name, title, content, categoryId, tags });
+export const deleteTemplate = (id: number) => invoke<void>('delete_template', { id });
+
+// Saved searches
+export interface SavedSearch {
+  id: number;
+  name: string;
+  query: string;
+  categoryId: number | null;
+  tagName: string | null;
+  timeRange: string | null;
+}
+
+export const listSavedSearches = () => invoke<SavedSearch[]>('list_saved_searches');
+export const createSavedSearch = (
+  name: string,
+  query: string,
+  categoryId: number | null,
+  tagName: string | null,
+  timeRange: string | null
+) =>
+  invoke<SavedSearch>('create_saved_search', { name, query, categoryId, tagName, timeRange });
+export const deleteSavedSearch = (id: number) => invoke<void>('delete_saved_search', { id });
+
+// Statistics
+export interface CategoryCount {
+  name: string;
+  count: number;
+}
+export interface NoteStatistics {
+  totalNotes: number;
+  archivedNotes: number;
+  notesWithReminders: number;
+  totalContacts: number;
+  totalCoworkers: number;
+  notesThisWeek: number;
+  notesPerCategory: CategoryCount[];
+}
+
+export const getStatistics = () => invoke<NoteStatistics>('get_statistics');
+
+// Quick capture
+export const quickCapture = (text: string, categoryId: number | null = null) =>
+  invoke<Note>('quick_capture', { text, categoryId });
+
+// Single note export
+export const exportNoteToFile = (id: number, path: string, format: string) =>
+  invoke<void>('export_note_to_file', { id, path, format });
+
+// Notes CSV/JSON export
+export const exportNotesToFile = (path: string, format: string) =>
+  invoke<void>('export_notes_to_file', { path, format });
+
+// vCard export
+export const exportContactsVcard = (path: string) =>
+  invoke<void>('export_contacts_vcard', { path });
+
+// Database backup/restore
+export const backupDatabase = (path: string) => invoke<void>('backup_database', { path });
+export const restoreDatabase = (path: string) => invoke<void>('restore_database', { path });

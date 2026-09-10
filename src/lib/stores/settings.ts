@@ -5,13 +5,15 @@ export interface Settings {
   hideOnBlur: boolean;
   defaultCategory: number | null;
   graphSignedIn: boolean;
+  autosaveInterval: number;
 }
 
 const defaultSettings: Settings = {
   theme: 'system',
   hideOnBlur: true,
   defaultCategory: null,
-  graphSignedIn: false
+  graphSignedIn: false,
+  autosaveInterval: 800
 };
 
 export const settings = writable<Settings>(defaultSettings);

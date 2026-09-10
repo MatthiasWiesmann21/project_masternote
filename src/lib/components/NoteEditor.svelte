@@ -1,7 +1,10 @@
 <script lang="ts">
   import type { Note, Coworker } from '$lib/api';
   import * as api from '$lib/api';
-  import { categories, saveNote, selectedNoteId, removeNote, notes } from '$lib/stores/notes';
+  import { categories, saveNote, selectedNoteId, removeNote, notes, filteredNotes } from '$lib/stores/notes';
+  import { settings } from '$lib/stores/settings';
+  import { save as saveDialog } from '@tauri-apps/plugin-dialog';
+  import { marked } from 'marked';
   import TagPicker from './TagPicker.svelte';
   import ReminderDialog from './ReminderDialog.svelte';
   import ContactPicker from './ContactPicker.svelte';
@@ -22,6 +25,7 @@
   let showCalendarDialog = $state(false);
   let showDeleteConfirm = $state(false);
   let showCopyConfirm = $state(false);
+  let showArchiveConfirm = $state(false);
   let copyStatus = $state('');
   let rapportCoworkerQuery = $state('');
   let rapportCoworkerResults = $state<Coworker[]>([]);
@@ -29,6 +33,7 @@
   let calendarDate = $state('');
   let calendarTime = $state('12:00');
   let graphStatus = $state('');
+  let showPreview = $state(false);
 
   // Element refs for keyboard shortcuts
   let titleEl = $state<HTMLInputElement | null>(null);
@@ -69,7 +74,12 @@
   function scheduleAutosave() {
     errorMsg = '';
     if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(doSave, 800);
+    const interval = $settings.autosaveInterval;
+    if (interval === 0) {
+      doSave();
+    } else {
+      saveTimer = setTimeout(doSave, interval);
+    }
   }
 
   async function doSave() {
@@ -124,6 +134,46 @@
       loadNote(copied);
     } catch (e: any) {
       errorMsg = e?.message ?? String(e);
+    }
+  }
+
+  async function handleArchive() {
+    if (!note) return;
+    try {
+      await api.archiveNote(note.id);
+      showArchiveConfirm = false;
+      newNote();
+    } catch (e: any) {
+      errorMsg = e?.message ?? String(e);
+    }
+  }
+
+  async function handleExportNote() {
+    if (!note) return;
+    try {
+      const path = await saveDialog({
+        defaultPath: `${note.title || 'note'}.md`,
+        filters: [
+          { name: 'Markdown', extensions: ['md'] },
+          { name: 'Text', extensions: ['txt'] }
+        ]
+      });
+      if (path) {
+        const format = path.endsWith('.txt') ? 'txt' : 'md';
+        await api.exportNoteToFile(note.id, path, format);
+        saveStatus = 'Exported';
+        setTimeout(() => (saveStatus = ''), 2000);
+      }
+    } catch (e: any) {
+      errorMsg = e?.message ?? String(e);
+    }
+  }
+
+  function renderPreview(text: string): string {
+    try {
+      return marked.parse(text, { breaks: true, async: false }) as string;
+    } catch {
+      return text;
     }
   }
 
@@ -219,8 +269,8 @@
     }
     if (mod && e.shiftKey && e.key === 'Tab') {
       e.preventDefault();
-      // Select next note in the list
-      const allNotes = $notes;
+      // Select next note in the filtered list
+      const allNotes = $filteredNotes;
       if (allNotes.length === 0) return;
       const currentId = $selectedNoteId;
       const currentIdx = currentId !== null ? allNotes.findIndex((n) => n.id === currentId) : -1;
@@ -261,13 +311,20 @@
     <CoworkerPicker bind:this={coworkerPickerEl} selectedId={coworkerId} onSelect={(id) => { coworkerId = id; scheduleAutosave(); }} />
   </div>
 
-  <textarea
-    bind:this={textareaEl}
-    bind:value={content}
-    oninput={scheduleAutosave}
-    placeholder="Write what you hear…  (Ctrl+S save, Ctrl+N new, Ctrl+Shift+T title, Ctrl+Shift+D desc, Ctrl+Shift+C cat, Ctrl+Shift+K contact, Ctrl+Shift+H coworker)"
-    class="flex-1 w-full resize-none bg-transparent p-3 text-sm leading-relaxed outline-none placeholder:text-fg-muted font-mono"
-  ></textarea>
+  {#if showPreview}
+    <div class="flex-1 w-full overflow-y-auto p-3 text-sm leading-relaxed prose prose-sm dark:prose-invert max-w-none">
+      <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+      {@html renderPreview(content)}
+    </div>
+  {:else}
+    <textarea
+      bind:this={textareaEl}
+      bind:value={content}
+      oninput={scheduleAutosave}
+      placeholder="Write what you hear…  (Ctrl+S save, Ctrl+N new, Ctrl+Shift+T title, Ctrl+Shift+D desc, Ctrl+Shift+C cat, Ctrl+Shift+K contact, Ctrl+Shift+H coworker)"
+      class="flex-1 w-full resize-none bg-transparent p-3 text-sm leading-relaxed outline-none placeholder:text-fg-muted font-mono"
+    ></textarea>
+  {/if}
 
   {#if note}
     <div class="px-3 py-1.5 border-t border-border bg-bg-subtle">
@@ -327,6 +384,27 @@
           📅 Calendar
         </button>
       {/if}
+      <button
+        onclick={() => (showPreview = !showPreview)}
+        class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
+        title="Toggle Markdown preview"
+      >
+        {showPreview ? '✏ Edit' : '👁 Preview'}
+      </button>
+      <button
+        onclick={handleExportNote}
+        class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
+        title="Export this note to file"
+      >
+        ↧ Export
+      </button>
+      <button
+        onclick={() => (showArchiveConfirm = true)}
+        class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
+        title="Archive this note"
+      >
+        📦 Archive
+      </button>
       <button
         onclick={() => (showCopyConfirm = true)}
         class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition ml-auto"
@@ -531,6 +609,34 @@
       <div class="flex gap-2 justify-end">
         <button onclick={() => (showDeleteConfirm = false)} class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border">Cancel</button>
         <button onclick={handleDelete} class="text-xs px-3 py-1.5 rounded bg-red-500 text-white font-medium hover:opacity-90">Delete</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showArchiveConfirm && note}
+  <div
+    class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+    role="button"
+    tabindex="-1"
+    onclick={() => (showArchiveConfirm = false)}
+    onkeydown={(e) => { if (e.key === 'Escape') showArchiveConfirm = false; }}
+  >
+    <div
+      class="bg-bg rounded-lg shadow-2xl border border-border w-[360px] p-4 space-y-3"
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+    >
+      <h3 class="text-sm font-semibold">📦 Archive Note</h3>
+      <p class="text-xs text-fg-muted">
+        Archive "{note.title || 'Untitled'}"? Archived notes are hidden by default but can be shown via the filter.
+      </p>
+      <div class="flex gap-2 justify-end">
+        <button onclick={() => (showArchiveConfirm = false)} class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border">Cancel</button>
+        <button onclick={handleArchive} class="text-xs px-3 py-1.5 rounded bg-accent text-accent-fg font-medium hover:opacity-90">Archive</button>
       </div>
     </div>
   </div>

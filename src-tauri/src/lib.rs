@@ -39,13 +39,13 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Open database in user data dir
             let data_dir = dirs::data_dir()
-                .unwrap_or_else(|| std::env::temp_dir())
+                .unwrap_or_else(std::env::temp_dir)
                 .join("masternote");
             std::fs::create_dir_all(&data_dir)?;
             let db_path = data_dir.join("masternote.db");
@@ -56,7 +56,7 @@ pub fn run() {
             let db = Arc::new(db);
 
             // Graph client
-            let graph = GraphClient::new(&app.handle())?;
+            let graph = GraphClient::new(app.handle())?;
 
             // Start reminder scheduler
             reminders::start_reminder_scheduler(app.handle().clone(), Arc::clone(&db));
@@ -127,6 +127,7 @@ pub fn run() {
             commands::get_hotkeys,
             commands::set_open_hotkey,
             commands::set_save_close_hotkey,
+            commands::set_quick_capture_hotkey,
             commands::list_contacts,
             commands::search_contacts,
             commands::create_contact,
@@ -143,6 +144,29 @@ pub fn run() {
             commands::import_contacts_from_file,
             commands::open_telephone_rapport,
             commands::create_calendar_with_contact,
+            commands::delete_calendar_event,
+            commands::update_calendar_event,
+            commands::archive_note,
+            commands::unarchive_note,
+            commands::reorder_note,
+            commands::link_notes,
+            commands::unlink_notes,
+            commands::recent_contacts,
+            commands::recent_coworkers,
+            commands::list_notes_for_contact,
+            commands::list_templates,
+            commands::create_template,
+            commands::delete_template,
+            commands::list_saved_searches,
+            commands::create_saved_search,
+            commands::delete_saved_search,
+            commands::get_statistics,
+            commands::quick_capture,
+            commands::export_note_to_file,
+            commands::export_notes_to_file,
+            commands::export_contacts_vcard,
+            commands::backup_database,
+            commands::restore_database,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

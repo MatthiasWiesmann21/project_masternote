@@ -59,7 +59,7 @@
       class="w-full text-sm bg-bg-muted rounded px-2 py-1.5 border border-border outline-none mb-3"
     />
 
-    <label class="block text-xs text-fg-muted mb-1">Color</label>
+    <span class="block text-xs text-fg-muted mb-1">Color</span>
     <div class="flex items-center gap-1.5 mb-1 flex-wrap">
       {#each presets as c}
         <button

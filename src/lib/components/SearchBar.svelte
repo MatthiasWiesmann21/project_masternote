@@ -6,6 +6,7 @@
   let results = $state<SearchResult[]>([]);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let isSearching = $state(false);
+  let requestId = 0;
 
   let query = $state('');
 
@@ -18,14 +19,23 @@
       return;
     }
     isSearching = true;
+    const currentRequestId = ++requestId;
     debounceTimer = setTimeout(async () => {
       try {
-        results = await api.searchNotes(query, 50);
+        const res = await api.searchNotes(query, 50);
+        // Only apply results if this is the latest request
+        if (currentRequestId === requestId) {
+          results = res;
+        }
       } catch (e) {
         console.error('Search failed:', e);
-        results = [];
+        if (currentRequestId === requestId) {
+          results = [];
+        }
       } finally {
-        isSearching = false;
+        if (currentRequestId === requestId) {
+          isSearching = false;
+        }
       }
     }, 200);
   }

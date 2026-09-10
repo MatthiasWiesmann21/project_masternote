@@ -2,12 +2,15 @@
   import { onMount, onDestroy } from 'svelte';
   import { writable } from 'svelte/store';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+  import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
   import NoteEditor from '$lib/components/NoteEditor.svelte';
   import NoteList from '$lib/components/NoteList.svelte';
   import SearchBar from '$lib/components/SearchBar.svelte';
   import CategoryDialog from '$lib/components/CategoryDialog.svelte';
   import ContactDialog from '$lib/components/ContactDialog.svelte';
   import CoworkerDialog from '$lib/components/CoworkerDialog.svelte';
+  import ShortcutHelp from '$lib/components/ShortcutHelp.svelte';
+  import QuickCapture from '$lib/components/QuickCapture.svelte';
   import {
     notes,
     selectedNoteId,
@@ -18,7 +21,9 @@
     tags,
     categories,
     timeRangeSort,
-    lastError
+    lastError,
+    showArchived,
+    selectedNoteIds
   } from '$lib/stores/notes';
   import { settings } from '$lib/stores/settings';
   import * as api from '$lib/api';
@@ -32,6 +37,9 @@
   let showCategoryDialog = $state(false);
   let showContactDialog = $state(false);
   let showCoworkerDialog = $state(false);
+  let showShortcutHelp = $state(false);
+  let showQuickCapture = $state(false);
+  let statistics = $state<api.NoteStatistics | null>(null);
 
   // Hotkey settings
   let openHotkey = $state('Ctrl+Shift+M');
@@ -76,16 +84,31 @@
     }
   }
 
+  // Quick capture handler (triggered by global hotkey)
+  async function handleQuickCapture() {
+    showQuickCapture = true;
+  }
+
   let unlistenSaveClose: UnlistenFn | null = null;
   let unlistenDeviceCode: UnlistenFn | null = null;
+  let unlistenQuickCapture: UnlistenFn | null = null;
   let deviceCodeMsg = $state('');
   let graphClientId = $state('');
   let graphClientIdSaved = $state('');
+
+  async function loadStatistics() {
+    try {
+      statistics = await api.getStatistics();
+    } catch (e) {
+      console.error('Failed to load statistics:', e);
+    }
+  }
 
   onMount(async () => {
     window.addEventListener('select-search-result', handleSearchResult);
     // Listen for save-and-close event from backend (global hotkey)
     unlistenSaveClose = await listen('save-and-close', handleSaveAndClose);
+    unlistenQuickCapture = await listen('quick-capture', handleQuickCapture);
     // Listen for Graph device code during sign-in
     unlistenDeviceCode = await listen<{ message: string; user_code: string; verification_uri: string }>(
       'graph-device-code',
@@ -108,6 +131,7 @@
       console.error('Failed to load Graph client ID:', e);
     }
     await refreshAll();
+    loadStatistics();
     newNoteAndFocus();
   });
 
@@ -115,6 +139,7 @@
     window.removeEventListener('select-search-result', handleSearchResult);
     unlistenSaveClose?.();
     unlistenDeviceCode?.();
+    unlistenQuickCapture?.();
   });
 
   function toggleTagFilter(tagName: string) {
@@ -192,6 +217,67 @@
     }
   }
 
+  async function handleBackupDatabase() {
+    try {
+      const path = await saveDialog({
+        defaultPath: 'masternote-backup.db',
+        filters: [{ name: 'SQLite Database', extensions: ['db'] }]
+      });
+      if (path) {
+        await api.backupDatabase(path);
+      }
+    } catch (e: any) {
+      console.error('Backup failed:', e);
+    }
+  }
+
+  async function handleRestoreDatabase() {
+    try {
+      const path = await openDialog({
+        filters: [{ name: 'SQLite Database', extensions: ['db'] }]
+      });
+      if (path) {
+        await api.restoreDatabase(path);
+        await refreshAll();
+        loadStatistics();
+      }
+    } catch (e: any) {
+      console.error('Restore failed:', e);
+    }
+  }
+
+  async function handleExportNotes() {
+    try {
+      const path = await saveDialog({
+        defaultPath: 'masternote-notes.json',
+        filters: [
+          { name: 'JSON', extensions: ['json'] },
+          { name: 'CSV', extensions: ['csv'] }
+        ]
+      });
+      if (path) {
+        const format = path.endsWith('.csv') ? 'csv' : 'json';
+        await api.exportNotesToFile(path, format);
+      }
+    } catch (e: any) {
+      console.error('Export notes failed:', e);
+    }
+  }
+
+  async function handleExportVcard() {
+    try {
+      const path = await saveDialog({
+        defaultPath: 'contacts.vcf',
+        filters: [{ name: 'vCard', extensions: ['vcf'] }]
+      });
+      if (path) {
+        await api.exportContactsVcard(path);
+      }
+    } catch (e: any) {
+      console.error('vCard export failed:', e);
+    }
+  }
+
   let hasFilters = $derived($activeTagFilter !== null || $activeCategoryFilter !== null);
 </script>
 
@@ -200,6 +286,14 @@
     if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
       e.preventDefault();
       newNoteAndFocus();
+    }
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === '?') {
+      e.preventDefault();
+      showShortcutHelp = !showShortcutHelp;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Q') {
+      e.preventDefault();
+      showQuickCapture = true;
     }
     if (e.key === 'Escape') {
       handleHide();
@@ -223,6 +317,12 @@
     <button onclick={() => (showCoworkerDialog = true)} class="text-fg-muted hover:text-fg text-xs px-1" title="Manage coworkers">
       🤝
     </button>
+    <button onclick={() => (showQuickCapture = true)} class="text-fg-muted hover:text-fg text-xs px-1" title="Quick capture (Ctrl+Shift+Q)">
+      ⚡
+    </button>
+    <button onclick={() => (showShortcutHelp = true)} class="text-fg-muted hover:text-fg text-xs px-1" title="Keyboard shortcuts (Ctrl+Shift+?)">
+      ?
+    </button>
     <button onclick={() => (showSettings = !showSettings)} class="text-fg-muted hover:text-fg text-xs px-1" title="Settings">
       ⚙
     </button>
@@ -241,7 +341,7 @@
   {/if}
 
   {#if showSettings}
-    <div class="flex flex-col gap-2 px-3 py-2 border-b border-border bg-bg-subtle text-xs max-h-72 overflow-y-auto">
+    <div class="flex flex-col gap-2 px-3 py-2 border-b border-border bg-bg-subtle text-xs max-h-80 overflow-y-auto">
       <!-- Theme -->
       <label class="flex items-center gap-2">
         <span class="text-fg-muted w-28">Theme</span>
@@ -265,6 +365,21 @@
           class="accent-accent"
         />
         <span class="text-fg-muted">Hide widget when clicking outside</span>
+      </label>
+
+      <!-- Autosave interval -->
+      <label class="flex items-center gap-2">
+        <span class="text-fg-muted w-28">Autosave (ms)</span>
+        <input
+          type="number"
+          min="0"
+          max="10000"
+          step="100"
+          value={$settings.autosaveInterval}
+          onchange={(e) => settings.update((s) => ({ ...s, autosaveInterval: parseInt((e.target as HTMLInputElement).value) || 0 }))}
+          class="bg-bg-muted rounded px-2 py-1 border border-border w-20"
+        />
+        <span class="text-[10px] text-fg-muted">0 = instant</span>
       </label>
 
       <!-- Divider -->
@@ -312,8 +427,9 @@
       <div class="border-t border-border my-1"></div>
 
       <!-- Outlook -->
+      <div class="text-fg-muted font-medium mb-1">Outlook Integration</div>
       <div class="flex items-center gap-2">
-        <span class="text-fg-muted w-28">Outlook</span>
+        <span class="text-fg-muted w-28">Connection</span>
         {#if $settings.graphSignedIn}
           <button onclick={signOutGraph} class="px-2 py-1 rounded bg-bg-muted hover:bg-border">Sign out</button>
           <span class="text-green-500">✓ Connected</span>
@@ -336,6 +452,41 @@
       {#if deviceCodeMsg}
         <div class="text-[10px] text-blue-500 pl-28 whitespace-pre-wrap">{deviceCodeMsg}</div>
       {/if}
+
+      <!-- Divider -->
+      <div class="border-t border-border my-1"></div>
+
+      <!-- Data management -->
+      <div class="text-fg-muted font-medium mb-1">Data Management</div>
+      <div class="flex items-center gap-2 flex-wrap">
+        <button onclick={handleBackupDatabase} class="px-2 py-1 rounded bg-bg-muted hover:bg-border">Backup DB</button>
+        <button onclick={handleRestoreDatabase} class="px-2 py-1 rounded bg-bg-muted hover:bg-border">Restore DB</button>
+        <button onclick={handleExportNotes} class="px-2 py-1 rounded bg-bg-muted hover:bg-border">Export Notes</button>
+        <button onclick={handleExportVcard} class="px-2 py-1 rounded bg-bg-muted hover:bg-border">Export vCard</button>
+      </div>
+
+      <!-- Divider -->
+      <div class="border-t border-border my-1"></div>
+
+      <!-- Statistics -->
+      {#if statistics}
+        <div class="text-fg-muted font-medium mb-1">Statistics</div>
+        <div class="grid grid-cols-2 gap-1 text-[10px]">
+          <div>Total notes: <span class="text-fg">{statistics.totalNotes}</span></div>
+          <div>Archived: <span class="text-fg">{statistics.archivedNotes}</span></div>
+          <div>With reminders: <span class="text-fg">{statistics.notesWithReminders}</span></div>
+          <div>This week: <span class="text-fg">{statistics.notesThisWeek}</span></div>
+          <div>Contacts: <span class="text-fg">{statistics.totalContacts}</span></div>
+          <div>Coworkers: <span class="text-fg">{statistics.totalCoworkers}</span></div>
+        </div>
+        {#if statistics.notesPerCategory.length > 0}
+          <div class="mt-1">
+            {#each statistics.notesPerCategory as cat}
+              <div class="text-[10px] text-fg-muted">{cat.name}: {cat.count}</div>
+            {/each}
+          </div>
+        {/if}
+      {/if}
     </div>
   {/if}
 
@@ -353,6 +504,11 @@
     {#if hasFilters}
       <button onclick={clearFilters} class="text-[10px] px-1.5 text-fg-muted hover:text-fg ml-1">clear</button>
     {/if}
+
+    <label class="text-[10px] text-fg-muted ml-2 inline-flex items-center gap-1">
+      <input type="checkbox" checked={$showArchived} onchange={(e) => showArchived.set((e.target as HTMLInputElement).checked)} class="accent-accent" />
+      Show archived
+    </label>
 
     {#if $showFilterDropdown}
       <div class="absolute top-full left-3 mt-1 bg-bg rounded-lg border border-border shadow-lg p-3 z-50 w-72 max-h-72 overflow-y-auto">
@@ -431,4 +587,12 @@
 
 {#if showCoworkerDialog}
   <CoworkerDialog onClose={() => (showCoworkerDialog = false)} />
+{/if}
+
+{#if showShortcutHelp}
+  <ShortcutHelp onClose={() => (showShortcutHelp = false)} />
+{/if}
+
+{#if showQuickCapture}
+  <QuickCapture onClose={() => (showQuickCapture = false)} onSaved={() => { loadNotes(); loadStatistics(); }} />
 {/if}

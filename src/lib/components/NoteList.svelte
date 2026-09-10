@@ -1,12 +1,16 @@
 <script lang="ts">
   import type { Note } from '$lib/api';
-  import { selectedNoteId, activeTagFilter, activeCategoryFilter, searchQuery, timeRangeSort, filteredNotes } from '$lib/stores/notes';
+  import { selectedNoteId, activeTagFilter, activeCategoryFilter, searchQuery, timeRangeSort, filteredNotes, showArchived, selectedNoteIds } from '$lib/stores/notes';
   import * as api from '$lib/api';
 
   let { notes } = $props<{ notes: Note[] }>();
 
   let filtered = $derived.by(() => {
     let result: Note[] = notes;
+    // Filter archived unless showArchived is on
+    if (!$showArchived) {
+      result = result.filter((n: Note) => !n.archived);
+    }
     if ($activeTagFilter) {
       result = result.filter((n: Note) => n.tags.some((t) => t.name === $activeTagFilter));
     }
@@ -60,9 +64,46 @@
   function preview(text: string): string {
     return text.replace(/[#*`_~\[\]()]/g, '').slice(0, 80);
   }
+
+  let lastClickedId = $state<number | null>(null);
+
+  function handleClick(e: MouseEvent, n: Note) {
+    if (e.shiftKey && lastClickedId !== null) {
+      // Range selection
+      const ids = filtered.map((f) => f.id);
+      const startIdx = ids.indexOf(lastClickedId!);
+      const endIdx = ids.indexOf(n.id);
+      if (startIdx !== -1 && endIdx !== -1) {
+        const [from, to] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
+        selectedNoteIds.update((s) => {
+          const newSet = new Set(s);
+          for (let i = from; i <= to; i++) newSet.add(ids[i]);
+          return newSet;
+        });
+      }
+    } else if (e.ctrlKey || e.metaKey) {
+      // Toggle individual selection
+      selectedNoteIds.update((s) => {
+        const newSet = new Set(s);
+        if (newSet.has(n.id)) newSet.delete(n.id);
+        else newSet.add(n.id);
+        return newSet;
+      });
+    } else {
+      selectedNoteIds.set(new Set());
+      selectNote(n);
+    }
+    lastClickedId = n.id;
+  }
 </script>
 
 <div class="flex flex-col h-full overflow-hidden">
+  {#if $selectedNoteIds.size > 0}
+    <div class="px-3 py-1.5 bg-bg-subtle border-b border-border flex items-center gap-2 text-[10px]">
+      <span class="text-fg-muted">{$selectedNoteIds.size} selected</span>
+      <button onclick={() => selectedNoteIds.set(new Set())} class="text-fg-muted hover:text-fg">clear</button>
+    </div>
+  {/if}
   <div class="flex-1 overflow-y-auto">
     {#if filtered.length === 0}
       <div class="flex flex-col items-center justify-center h-full text-fg-muted text-xs px-4 text-center">
@@ -75,12 +116,15 @@
     {:else}
       {#each filtered as n (n.id)}
         <button
-          onclick={() => selectNote(n)}
-          class="w-full text-left px-3 py-2.5 border-b border-border hover:bg-bg-subtle transition {$selectedNoteId === n.id ? 'bg-bg-subtle border-l-2 border-l-accent' : ''}"
+          onclick={(e) => handleClick(e, n)}
+          class="w-full text-left px-3 py-2.5 border-b border-border hover:bg-bg-subtle transition {$selectedNoteId === n.id ? 'bg-bg-subtle border-l-2 border-l-accent' : ''} {$selectedNoteIds.has(n.id) ? 'bg-accent/10' : ''}"
         >
           <div class="flex items-start justify-between gap-2">
             <span class="text-sm font-medium truncate flex-1">
               {n.title || 'Untitled'}
+              {#if n.archived}
+                <span class="text-[10px] text-fg-muted ml-1">(archived)</span>
+              {/if}
             </span>
             <span class="text-[10px] text-fg-muted whitespace-nowrap mt-0.5">
               {formatDate(n.updatedAt)}

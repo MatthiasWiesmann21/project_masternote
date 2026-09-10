@@ -24,7 +24,7 @@
     "store:default",
     "notification:default",
     "notification:allow-notify",
-    "shell:allow-open",
+    "opener:default",
     "os:default",
     "dialog:default",
     "core:event:allow-listen",

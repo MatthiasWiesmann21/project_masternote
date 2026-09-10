@@ -9,6 +9,8 @@
   let createCalendarEvent = $state(false);
   let saving = $state(false);
   let error = $state('');
+  let recurInterval = $state<number | null>(null);
+  let recurUnit = $state<string | null>(null);
 
   function defaultDateTime(): string {
     const d = new Date(Date.now() + 60 * 60 * 1000);
@@ -24,7 +26,13 @@
     saving = true;
     error = '';
     try {
-      await api.setReminder(noteId, new Date(dueAt).toISOString(), createCalendarEvent);
+      await api.setReminder(
+        noteId,
+        new Date(dueAt).toISOString(),
+        createCalendarEvent,
+        recurInterval,
+        recurUnit
+      );
       await loadNotes();
       onClose();
     } catch (e: any) {
@@ -71,6 +79,33 @@
       bind:value={dueAt}
       class="w-full text-sm bg-bg-muted rounded px-2 py-1.5 border border-border outline-none mb-3"
     />
+
+    <div class="mb-3">
+      <span class="block text-xs text-fg-muted mb-1">Repeat</span>
+      <div class="flex items-center gap-2">
+        <select
+          bind:value={recurUnit}
+          class="flex-1 text-xs bg-bg-muted rounded px-2 py-1.5 border border-border outline-none"
+        >
+          <option value={null}>No repeat</option>
+          <option value="minutes">Minutes</option>
+          <option value="hours">Hours</option>
+          <option value="days">Days</option>
+          <option value="weeks">Weeks</option>
+          <option value="months">Months</option>
+        </select>
+        {#if recurUnit}
+          <input
+            type="number"
+            min="1"
+            max="999"
+            bind:value={recurInterval}
+            placeholder="every"
+            class="w-16 text-xs bg-bg-muted rounded px-2 py-1.5 border border-border outline-none"
+          />
+        {/if}
+      </div>
+    </div>
 
     {#if $settings.graphSignedIn}
       <label class="flex items-center gap-2 text-xs mb-3 cursor-pointer">

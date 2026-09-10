@@ -3,16 +3,35 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::db::{ContactInput, CoworkerInput, Database};
+use crate::db::{ContactInput, CoworkerInput, Database, TemplateInput, SavedSearchInput};
 use crate::graph::GraphClient;
 use crate::hotkey::HotkeyManager;
-use crate::models::{Category, Contact, Coworker, Note, Reminder, SearchResult, Tag};
+use crate::models::{Category, Contact, Coworker, Note, NoteStatistics, NoteTemplate, Reminder, SavedSearch, SearchResult, Tag};
+
+/// Maps internal errors to user-friendly messages.
+fn user_error(e: impl std::fmt::Display) -> String {
+    let msg = e.to_string();
+    if msg.contains("UNIQUE constraint") {
+        "An item with that name already exists.".to_string()
+    } else if msg.contains("FOREIGN KEY constraint") {
+        "Referenced item does not exist.".to_string()
+    } else if msg.contains("timed out") || msg.contains("timeout") {
+        "Network request timed out. Check your connection and try again.".to_string()
+    } else if msg.contains("401") || msg.contains("Unauthorized") {
+        "Outlook session expired — please sign in again in Settings.".to_string()
+    } else if msg.contains("duplicate column name") {
+        "Database column already exists.".to_string()
+    } else {
+        msg
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HotkeyConfig {
     pub open: String,
     pub save_close: String,
+    pub quick_capture: String,
 }
 
 // --- Note commands ---
@@ -27,7 +46,7 @@ pub fn create_note(
     coworker_id: Option<i64>,
 ) -> Result<Note, String> {
     db.create_note_full(&title, &content, category_id, contact_id, coworker_id)
-        .map_err(|e| e.to_string())
+        .map_err(user_error)
 }
 
 #[tauri::command]
@@ -41,17 +60,17 @@ pub fn update_note(
     coworker_id: Option<i64>,
 ) -> Result<Note, String> {
     db.update_note_full(id, &title, &content, category_id, contact_id, coworker_id)
-        .map_err(|e| e.to_string())
+        .map_err(user_error)
 }
 
 #[tauri::command]
 pub fn delete_note(db: State<'_, Arc<Database>>, id: i64) -> Result<(), String> {
-    db.delete_note(id).map_err(|e| e.to_string())
+    db.delete_note(id).map_err(user_error)
 }
 
 #[tauri::command]
 pub fn get_note(db: State<'_, Arc<Database>>, id: i64) -> Result<Note, String> {
-    db.get_note(id).map_err(|e| e.to_string())
+    db.get_note(id).map_err(user_error)
 }
 
 #[tauri::command]
@@ -61,7 +80,7 @@ pub fn list_notes(
     offset: Option<i64>,
 ) -> Result<Vec<Note>, String> {
     db.list_notes(limit.unwrap_or(100), offset.unwrap_or(0))
-        .map_err(|e| e.to_string())
+        .map_err(user_error)
 }
 
 #[tauri::command]
@@ -71,14 +90,14 @@ pub fn search_notes(
     limit: Option<i64>,
 ) -> Result<Vec<SearchResult>, String> {
     db.search_notes(&query, limit.unwrap_or(50))
-        .map_err(|e| e.to_string())
+        .map_err(user_error)
 }
 
 // --- Tag commands ---
 
 #[tauri::command]
 pub fn list_tags(db: State<'_, Arc<Database>>) -> Result<Vec<Tag>, String> {
-    db.list_tags().map_err(|e| e.to_string())
+    db.list_tags().map_err(user_error)
 }
 
 #[tauri::command]
@@ -88,7 +107,7 @@ pub fn add_tag_to_note(
     tag_name: String,
 ) -> Result<Tag, String> {
     db.add_tag_to_note(note_id, &tag_name)
-        .map_err(|e| e.to_string())
+        .map_err(user_error)
 }
 
 #[tauri::command]
@@ -98,14 +117,14 @@ pub fn remove_tag_from_note(
     tag_id: i64,
 ) -> Result<(), String> {
     db.remove_tag_from_note(note_id, tag_id)
-        .map_err(|e| e.to_string())
+        .map_err(user_error)
 }
 
 // --- Category commands ---
 
 #[tauri::command]
 pub fn list_categories(db: State<'_, Arc<Database>>) -> Result<Vec<Category>, String> {
-    db.list_categories().map_err(|e| e.to_string())
+    db.list_categories().map_err(user_error)
 }
 
 #[tauri::command]
@@ -114,7 +133,7 @@ pub fn create_category(
     name: String,
     color: String,
 ) -> Result<Category, String> {
-    db.create_category(&name, &color).map_err(|e| e.to_string())
+    db.create_category(&name, &color).map_err(user_error)
 }
 
 // --- Reminder commands ---
@@ -126,17 +145,19 @@ pub fn set_reminder(
     note_id: i64,
     due_at: String,
     create_calendar_event: bool,
+    recur_interval: Option<i64>,
+    recur_unit: Option<String>,
 ) -> Result<Reminder, String> {
     let reminder = db
-        .set_reminder(note_id, &due_at)
-        .map_err(|e| e.to_string())?;
+        .set_reminder(note_id, &due_at, recur_interval, recur_unit.as_deref())
+        .map_err(user_error)?;
 
     if create_calendar_event {
-        let note = db.get_note(note_id).map_err(|e| e.to_string())?;
+        let note = db.get_note(note_id).map_err(user_error)?;
         match graph.create_event(&note.title, &reminder.due_at, &note.content) {
             Ok(event_id) => {
                 db.update_reminder_calendar_event(reminder.id, &event_id)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(user_error)?;
             }
             Err(e) => {
                 log::warn!("Failed to create calendar event: {}", e);
@@ -145,25 +166,25 @@ pub fn set_reminder(
     }
 
     db.get_reminder_for_note(note_id)
-        .map_err(|e| e.to_string())?
+        .map_err(user_error)?
         .ok_or_else(|| "Reminder not found after insert".to_string())
 }
 
 #[tauri::command]
 pub fn delete_reminder(db: State<'_, Arc<Database>>, note_id: i64) -> Result<(), String> {
-    db.delete_reminder(note_id).map_err(|e| e.to_string())
+    db.delete_reminder(note_id).map_err(user_error)
 }
 
 // --- Graph commands ---
 
 #[tauri::command]
 pub async fn graph_sign_in(graph: State<'_, GraphClient>) -> Result<bool, String> {
-    graph.sign_in().await.map_err(|e| e.to_string())
+    graph.sign_in().await.map_err(user_error)
 }
 
 #[tauri::command]
 pub async fn graph_sign_out(graph: State<'_, GraphClient>) -> Result<(), String> {
-    graph.sign_out().await.map_err(|e| e.to_string())
+    graph.sign_out().await.map_err(user_error)
 }
 
 #[tauri::command]
@@ -201,6 +222,7 @@ pub fn get_hotkeys(hotkey_manager: State<'_, HotkeyManager>) -> Result<HotkeyCon
     Ok(HotkeyConfig {
         open: hotkey_manager.get_open_hotkey(),
         save_close: hotkey_manager.get_save_close_hotkey(),
+        quick_capture: hotkey_manager.get_quick_capture_hotkey(),
     })
 }
 
@@ -218,6 +240,14 @@ pub fn set_save_close_hotkey(
     hotkey: String,
 ) -> Result<(), String> {
     hotkey_manager.set_save_close_hotkey(&hotkey)
+}
+
+#[tauri::command]
+pub fn set_quick_capture_hotkey(
+    hotkey_manager: State<'_, HotkeyManager>,
+    hotkey: String,
+) -> Result<(), String> {
+    hotkey_manager.set_quick_capture_hotkey(&hotkey)
 }
 
 // --- Contact commands ---
@@ -256,7 +286,7 @@ impl From<&ContactPayload> for ContactInput {
 
 #[tauri::command]
 pub fn list_contacts(db: State<'_, Arc<Database>>) -> Result<Vec<Contact>, String> {
-    db.list_contacts().map_err(|e| e.to_string())
+    db.list_contacts().map_err(user_error)
 }
 
 #[tauri::command]
@@ -264,7 +294,7 @@ pub fn search_contacts(
     db: State<'_, Arc<Database>>,
     query: String,
 ) -> Result<Vec<Contact>, String> {
-    db.search_contacts(&query).map_err(|e| e.to_string())
+    db.search_contacts(&query).map_err(user_error)
 }
 
 #[tauri::command]
@@ -273,7 +303,7 @@ pub fn create_contact(
     contact: ContactPayload,
 ) -> Result<Contact, String> {
     db.create_contact(&ContactInput::from(&contact))
-        .map_err(|e| e.to_string())
+        .map_err(user_error)
 }
 
 #[tauri::command]
@@ -283,12 +313,12 @@ pub fn update_contact(
     contact: ContactPayload,
 ) -> Result<Contact, String> {
     db.update_contact(id, &ContactInput::from(&contact))
-        .map_err(|e| e.to_string())
+        .map_err(user_error)
 }
 
 #[tauri::command]
 pub fn delete_contact(db: State<'_, Arc<Database>>, id: i64) -> Result<(), String> {
-    db.delete_contact(id).map_err(|e| e.to_string())
+    db.delete_contact(id).map_err(user_error)
 }
 
 // --- Coworker commands ---
@@ -313,7 +343,7 @@ impl From<&CoworkerPayload> for CoworkerInput {
 
 #[tauri::command]
 pub fn list_coworkers(db: State<'_, Arc<Database>>) -> Result<Vec<Coworker>, String> {
-    db.list_coworkers().map_err(|e| e.to_string())
+    db.list_coworkers().map_err(user_error)
 }
 
 #[tauri::command]
@@ -321,7 +351,7 @@ pub fn search_coworkers(
     db: State<'_, Arc<Database>>,
     query: String,
 ) -> Result<Vec<Coworker>, String> {
-    db.search_coworkers(&query).map_err(|e| e.to_string())
+    db.search_coworkers(&query).map_err(user_error)
 }
 
 #[tauri::command]
@@ -330,7 +360,7 @@ pub fn create_coworker(
     coworker: CoworkerPayload,
 ) -> Result<Coworker, String> {
     db.create_coworker(&CoworkerInput::from(&coworker))
-        .map_err(|e| e.to_string())
+        .map_err(user_error)
 }
 
 #[tauri::command]
@@ -340,19 +370,19 @@ pub fn update_coworker(
     coworker: CoworkerPayload,
 ) -> Result<Coworker, String> {
     db.update_coworker(id, &CoworkerInput::from(&coworker))
-        .map_err(|e| e.to_string())
+        .map_err(user_error)
 }
 
 #[tauri::command]
 pub fn delete_coworker(db: State<'_, Arc<Database>>, id: i64) -> Result<(), String> {
-    db.delete_coworker(id).map_err(|e| e.to_string())
+    db.delete_coworker(id).map_err(user_error)
 }
 
 // --- CSV import/export for contacts ---
 
 #[tauri::command]
 pub fn export_contacts_csv(db: State<'_, Arc<Database>>) -> Result<String, String> {
-    let contacts = db.list_contacts().map_err(|e| e.to_string())?;
+    let contacts = db.list_contacts().map_err(user_error)?;
     let mut csv = String::new();
     // Header
     csv.push_str("first_name,last_name,address,email,gender,kind,company_name,customer_identifier,phone,mobile\n");
@@ -443,7 +473,7 @@ pub fn import_contacts_csv(
         if input.last_name.is_empty() && input.first_name.is_empty() && input.company_name.is_none() {
             continue;
         }
-        db.create_contact(&input).map_err(|e| e.to_string())?;
+        db.create_contact(&input).map_err(user_error)?;
         count += 1;
     }
     Ok(count)
@@ -487,9 +517,7 @@ pub fn open_telephone_rapport(
     note_id: i64,
     to_email: String,
 ) -> Result<(), String> {
-    use tauri_plugin_shell::ShellExt;
-
-    let note = db.get_note(note_id).map_err(|e| e.to_string())?;
+    let note = db.get_note(note_id).map_err(user_error)?;
     let contact = note.contact.as_ref().ok_or("No contact linked to this note")?;
 
     let subject = format!(
@@ -526,8 +554,8 @@ pub fn open_telephone_rapport(
     let body_enc = urlencoding::encode(&body);
     let mailto = format!("mailto:{}?subject={}&body={}", to_email, subject_enc, body_enc);
 
-    app.shell()
-        .open(mailto, None)
+    tauri_plugin_opener::OpenerExt::opener(&app)
+        .open_url(mailto, None::<&str>)
         .map_err(|e| format!("Failed to open mail client: {}", e))
 }
 
@@ -538,18 +566,22 @@ pub async fn create_calendar_with_contact(
     note_id: i64,
     due_at: String,
 ) -> Result<String, String> {
-    let note = db.get_note(note_id).map_err(|e| e.to_string())?;
+    let note = db.get_note(note_id).map_err(user_error)?;
 
     // Build title from contact name + identifier
     let mut title = note.title.clone();
     if let Some(ref contact) = note.contact {
-        let contact_name = if contact.kind == "company" && contact.company_name.is_some() {
-            contact.company_name.as_ref().unwrap().clone()
+        let contact_name = if contact.kind == "company" {
+            if let Some(company) = &contact.company_name {
+                company.clone()
+            } else {
+                format!("{} {}", contact.first_name, contact.last_name)
+            }
         } else {
             format!("{} {}", contact.first_name, contact.last_name)
         };
-        title = if contact.customer_identifier.is_some() {
-            format!("{} ({})", contact_name, contact.customer_identifier.as_ref().unwrap())
+        title = if let Some(identifier) = &contact.customer_identifier {
+            format!("{} ({})", contact_name, identifier)
         } else {
             contact_name
         };
@@ -558,12 +590,326 @@ pub async fn create_calendar_with_contact(
     // Create calendar event with 1h duration
     let event_id = graph
         .create_event_with_duration(&title, &due_at, &note.content, 60)
-        .map_err(|e| e.to_string())?;
+        .map_err(user_error)?;
 
     // Also set a reminder in the DB and link the calendar event
-    let reminder = db.set_reminder(note_id, &due_at).map_err(|e| e.to_string())?;
+    let reminder = db
+        .set_reminder(note_id, &due_at, None, None)
+        .map_err(user_error)?;
     db.update_reminder_calendar_event(reminder.id, &event_id)
-        .map_err(|e| e.to_string())?;
+        .map_err(user_error)?;
 
     Ok(event_id)
+}
+
+// --- Calendar event management ---
+
+#[tauri::command]
+pub fn delete_calendar_event(
+    db: State<'_, Arc<Database>>,
+    graph: State<'_, GraphClient>,
+    note_id: i64,
+) -> Result<(), String> {
+    let reminder = db
+        .get_reminder_for_note(note_id)
+        .map_err(user_error)?
+        .ok_or_else(|| "No reminder found for this note".to_string())?;
+
+    if let Some(event_id) = &reminder.calendar_event_id {
+        graph.delete_event(event_id).map_err(user_error)?;
+    }
+    db.delete_reminder(note_id).map_err(user_error)
+}
+
+#[tauri::command]
+pub fn update_calendar_event(
+    db: State<'_, Arc<Database>>,
+    graph: State<'_, GraphClient>,
+    note_id: i64,
+    due_at: String,
+) -> Result<(), String> {
+    let reminder = db
+        .get_reminder_for_note(note_id)
+        .map_err(user_error)?
+        .ok_or_else(|| "No reminder found for this note".to_string())?;
+
+    let note = db.get_note(note_id).map_err(user_error)?;
+
+    if let Some(event_id) = &reminder.calendar_event_id {
+        graph
+            .update_event(event_id, &note.title, &due_at, &note.content, 30)
+            .map_err(user_error)?;
+    }
+
+    db.set_reminder(note_id, &due_at, reminder.recur_interval, reminder.recur_unit.as_deref())
+        .map_err(user_error)?;
+
+    Ok(())
+}
+
+// --- Archive commands ---
+
+#[tauri::command]
+pub fn archive_note(db: State<'_, Arc<Database>>, id: i64) -> Result<(), String> {
+    db.archive_note(id).map_err(user_error)
+}
+
+#[tauri::command]
+pub fn unarchive_note(db: State<'_, Arc<Database>>, id: i64) -> Result<(), String> {
+    db.unarchive_note(id).map_err(user_error)
+}
+
+// --- Note reordering ---
+
+#[tauri::command]
+pub fn reorder_note(db: State<'_, Arc<Database>>, id: i64, sort_order: i64) -> Result<(), String> {
+    db.reorder_note(id, sort_order).map_err(user_error)
+}
+
+// --- Note links ---
+
+#[tauri::command]
+pub fn link_notes(db: State<'_, Arc<Database>>, from_id: i64, to_id: i64) -> Result<(), String> {
+    db.link_notes(from_id, to_id).map_err(user_error)
+}
+
+#[tauri::command]
+pub fn unlink_notes(db: State<'_, Arc<Database>>, from_id: i64, to_id: i64) -> Result<(), String> {
+    db.unlink_notes(from_id, to_id).map_err(user_error)
+}
+
+// --- Recent contacts/coworkers ---
+
+#[tauri::command]
+pub fn recent_contacts(db: State<'_, Arc<Database>>, limit: i64) -> Result<Vec<Contact>, String> {
+    db.recent_contacts(limit).map_err(user_error)
+}
+
+#[tauri::command]
+pub fn recent_coworkers(db: State<'_, Arc<Database>>, limit: i64) -> Result<Vec<Coworker>, String> {
+    db.recent_coworkers(limit).map_err(user_error)
+}
+
+// --- Contact note history ---
+
+#[tauri::command]
+pub fn list_notes_for_contact(db: State<'_, Arc<Database>>, contact_id: i64) -> Result<Vec<Note>, String> {
+    db.list_notes_for_contact(contact_id).map_err(user_error)
+}
+
+// --- Note templates ---
+
+#[tauri::command]
+pub fn list_templates(db: State<'_, Arc<Database>>) -> Result<Vec<NoteTemplate>, String> {
+    db.list_templates().map_err(user_error)
+}
+
+#[tauri::command]
+pub fn create_template(
+    db: State<'_, Arc<Database>>,
+    name: String,
+    title: String,
+    content: String,
+    category_id: Option<i64>,
+    tags: String,
+) -> Result<NoteTemplate, String> {
+    db.create_template(&TemplateInput {
+        name,
+        title,
+        content,
+        category_id,
+        tags,
+    })
+    .map_err(user_error)
+}
+
+#[tauri::command]
+pub fn delete_template(db: State<'_, Arc<Database>>, id: i64) -> Result<(), String> {
+    db.delete_template(id).map_err(user_error)
+}
+
+// --- Saved searches ---
+
+#[tauri::command]
+pub fn list_saved_searches(db: State<'_, Arc<Database>>) -> Result<Vec<SavedSearch>, String> {
+    db.list_saved_searches().map_err(user_error)
+}
+
+#[tauri::command]
+pub fn create_saved_search(
+    db: State<'_, Arc<Database>>,
+    name: String,
+    query: String,
+    category_id: Option<i64>,
+    tag_name: Option<String>,
+    time_range: Option<String>,
+) -> Result<SavedSearch, String> {
+    db.create_saved_search(&SavedSearchInput {
+        name,
+        query,
+        category_id,
+        tag_name,
+        time_range,
+    })
+    .map_err(user_error)
+}
+
+#[tauri::command]
+pub fn delete_saved_search(db: State<'_, Arc<Database>>, id: i64) -> Result<(), String> {
+    db.delete_saved_search(id).map_err(user_error)
+}
+
+// --- Statistics ---
+
+#[tauri::command]
+pub fn get_statistics(db: State<'_, Arc<Database>>) -> Result<NoteStatistics, String> {
+    db.get_statistics().map_err(user_error)
+}
+
+// --- Quick capture ---
+
+#[tauri::command]
+pub fn quick_capture(
+    db: State<'_, Arc<Database>>,
+    text: String,
+    category_id: Option<i64>,
+) -> Result<Note, String> {
+    db.create_note_full("", &text, category_id, None, None)
+        .map_err(user_error)
+}
+
+// --- Single note export ---
+
+#[tauri::command]
+pub fn export_note_to_file(
+    db: State<'_, Arc<Database>>,
+    id: i64,
+    path: String,
+    format: String,
+) -> Result<(), String> {
+    let note = db.get_note(id).map_err(user_error)?;
+    let content = match format.as_str() {
+        "md" => {
+            let mut md = format!("# {}\n\n", note.title);
+            md.push_str(&note.content);
+            if let Some(cat) = &note.category_name {
+                md.push_str(&format!("\n\n*Category: {}*", cat));
+            }
+            if !note.tags.is_empty() {
+                let tags: Vec<String> = note.tags.iter().map(|t| t.name.clone()).collect();
+                md.push_str(&format!("\n*Tags: {}*", tags.join(", ")));
+            }
+            md
+        }
+        _ => {
+            let mut txt = format!("{}\n\n", note.title);
+            txt.push_str(&note.content);
+            txt
+        }
+    };
+    std::fs::write(&path, content).map_err(|e| format!("Failed to write file: {}", e))
+}
+
+// --- Notes CSV/JSON export ---
+
+#[tauri::command]
+pub fn export_notes_to_file(
+    db: State<'_, Arc<Database>>,
+    path: String,
+    format: String,
+) -> Result<(), String> {
+    let notes = db.list_notes_filtered(10000, 0, true).map_err(user_error)?;
+
+    let content = match format.as_str() {
+        "json" => {
+            serde_json::to_string_pretty(&notes)
+                .map_err(|e| format!("Failed to serialize JSON: {}", e))?
+        }
+        _ => {
+            let mut csv = String::from("id,title,content,category,tags,contact,coworker,created_at,updated_at\n");
+            for n in &notes {
+                let tags: Vec<String> = n.tags.iter().map(|t| t.name.clone()).collect();
+                let category = n.category_name.clone().unwrap_or_default();
+                let contact = n.contact.as_ref().map(|c| {
+                    format!("{} {}", c.first_name, c.last_name)
+                }).unwrap_or_default();
+                let coworker = n.coworker.as_ref().map(|c| {
+                    format!("{} {}", c.first_name, c.last_name)
+                }).unwrap_or_default();
+                csv.push_str(&format!(
+                    "{},\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"\n",
+                    n.id,
+                    n.title.replace('"', "\"\""),
+                    n.content.replace('"', "\"\"").replace('\n', "\\n"),
+                    category,
+                    tags.join(";"),
+                    contact,
+                    coworker,
+                    n.created_at,
+                    n.updated_at,
+                ));
+            }
+            csv
+        }
+    };
+    std::fs::write(&path, content).map_err(|e| format!("Failed to write file: {}", e))
+}
+
+// --- vCard export ---
+
+#[tauri::command]
+pub fn export_contacts_vcard(db: State<'_, Arc<Database>>, path: String) -> Result<(), String> {
+    let contacts = db.list_contacts().map_err(user_error)?;
+    let mut vcard = String::new();
+    for c in &contacts {
+        vcard.push_str("BEGIN:VCARD\nVERSION:3.0\n");
+        vcard.push_str(&format!("N:{};{}\n", c.last_name, c.first_name));
+        vcard.push_str(&format!("FN:{} {}\n", c.first_name, c.last_name));
+        if let Some(ref email) = c.email {
+            vcard.push_str(&format!("EMAIL:{}\n", email));
+        }
+        if let Some(ref phone) = c.phone {
+            vcard.push_str(&format!("TEL;TYPE=WORK:{}\n", phone));
+        }
+        if let Some(ref mobile) = c.mobile {
+            vcard.push_str(&format!("TEL;TYPE=CELL:{}\n", mobile));
+        }
+        if let Some(ref company) = c.company_name {
+            vcard.push_str(&format!("ORG:{}\n", company));
+        }
+        if let Some(ref addr) = c.address {
+            vcard.push_str(&format!("ADR:;;{};;;;\n", addr));
+        }
+        vcard.push_str("END:VCARD\n");
+    }
+    std::fs::write(&path, vcard).map_err(|e| format!("Failed to write file: {}", e))
+}
+
+// --- Database backup ---
+
+#[tauri::command]
+pub fn backup_database(path: String) -> Result<(), String> {
+    let data_dir = dirs::data_dir()
+        .ok_or_else(|| "Cannot find data directory".to_string())?
+        .join("masternote");
+    let db_path = data_dir.join("masternote.db");
+    std::fs::copy(&db_path, &path).map_err(|e| format!("Failed to backup database: {}", e))?;
+    Ok(())
+}
+
+// --- Database restore ---
+
+#[tauri::command]
+pub fn restore_database(path: String) -> Result<(), String> {
+    let data_dir = dirs::data_dir()
+        .ok_or_else(|| "Cannot find data directory".to_string())?
+        .join("masternote");
+    let db_path = data_dir.join("masternote.db");
+    // Backup current DB first
+    let backup_path = data_dir.join("masternote.db.bak");
+    if db_path.exists() {
+        std::fs::copy(&db_path, &backup_path).map_err(|e| format!("Failed to backup current DB: {}", e))?;
+    }
+    std::fs::copy(&path, &db_path).map_err(|e| format!("Failed to restore database: {}", e))?;
+    Ok(())
 }

@@ -50,7 +50,7 @@ impl GraphClient {
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .filter(|s| !s.is_empty())
             .or_else(|| std::env::var("MASTERNOTE_GRAPH_CLIENT_ID").ok())
-            .unwrap_or_else(|| String::new());
+            .unwrap_or_else(String::new);
 
         Ok(Self {
             client: reqwest::Client::new(),
@@ -201,11 +201,102 @@ impl GraphClient {
         Ok(())
     }
 
-    fn get_access_token(&self) -> Result<String, String> {
-        self.store
-            .get("access_token")
+    fn is_token_expired(&self) -> bool {
+        let expires_at = self
+            .store
+            .get("expires_at")
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+
+        match expires_at {
+            Some(ts) => {
+                let exp: i64 = ts.parse().unwrap_or(0);
+                let now = chrono::Utc::now().timestamp();
+                // Refresh 5 minutes before expiry
+                now >= exp - 300
+            }
+            None => true,
+        }
+    }
+
+    async fn refresh_access_token(&self) -> Result<String, String> {
+        let refresh_token = self
+            .store
+            .get("refresh_token")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .ok_or_else(|| "Not signed in to Microsoft Graph".to_string())
+            .ok_or_else(|| "No refresh token — please sign in again".to_string())?;
+
+        let client_id = self.client_id.lock().unwrap().clone();
+
+        let res = self
+            .client
+            .post(TOKEN_URL)
+            .form(&[
+                ("grant_type", "refresh_token"),
+                ("client_id", client_id.as_str()),
+                ("refresh_token", &refresh_token),
+                ("scope", &GRAPH_SCOPES.join(" ")),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("Token refresh request failed: {}", e))?;
+
+        let status = res.status();
+        let body: serde_json::Value =
+            res.json().await.map_err(|e| format!("Token refresh parse error: {}", e))?;
+
+        if !status.is_success() {
+            let err = body
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            return Err(format!("Token refresh failed: {}. Please sign in again.", err));
+        }
+
+        let token: TokenResponse = serde_json::from_value(body)
+            .map_err(|e| format!("Token refresh deserialize error: {}", e))?;
+
+        self.store
+            .set("access_token", serde_json::Value::String(token.access_token.clone()));
+        if let Some(rt) = token.refresh_token {
+            self.store
+                .set("refresh_token", serde_json::Value::String(rt));
+        }
+        self.store.set(
+            "expires_at",
+            serde_json::Value::String(
+                chrono::Utc::now()
+                    .timestamp()
+                    .saturating_add(token.expires_in as i64)
+                    .to_string(),
+            ),
+        );
+        self.store.save().ok();
+
+        Ok(token.access_token)
+    }
+
+    async fn get_valid_access_token(&self) -> Result<String, String> {
+        if self.is_token_expired() {
+            let has_refresh = self
+                .store
+                .get("refresh_token")
+                .map(|v| v.is_string() && !v.as_str().unwrap_or("").is_empty())
+                .unwrap_or(false);
+
+            if has_refresh {
+                self.refresh_access_token().await
+            } else {
+                self.store
+                    .get("access_token")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .ok_or_else(|| "Not signed in to Microsoft Graph".to_string())
+            }
+        } else {
+            self.store
+                .get("access_token")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .ok_or_else(|| "Not signed in to Microsoft Graph".to_string())
+        }
     }
 
     pub fn create_event(
@@ -224,11 +315,11 @@ impl GraphClient {
         body: &str,
         duration_minutes: i64,
     ) -> Result<String, String> {
-        let token = self.get_access_token()?;
         let client = self.client.clone();
         let start = start_iso.to_string();
         let title = title.to_string();
         let body = body.to_string();
+        let this = self;
 
         // Compute end time = start + duration
         let start_dt = chrono::DateTime::parse_from_rfc3339(&start)
@@ -256,8 +347,10 @@ impl GraphClient {
 
         let rt = tokio::runtime::Handle::current();
         rt.block_on(async move {
+            let token = this.get_valid_access_token().await?;
+
             let resp = client
-                .post(&format!("{}/me/events", GRAPH_BASE))
+                .post(format!("{}/me/events", GRAPH_BASE))
                 .header("Authorization", format!("Bearer {}", token))
                 .header("Content-Type", "application/json")
                 .json(&event_body)
@@ -282,6 +375,101 @@ impl GraphClient {
             let event: GraphEvent = serde_json::from_value(body)
                 .map_err(|e| format!("Event parse error: {}", e))?;
             Ok(event.id)
+        })
+    }
+
+    pub fn delete_event(&self, event_id: &str) -> Result<(), String> {
+        let client = self.client.clone();
+        let event_id = event_id.to_string();
+
+        let rt = tokio::runtime::Handle::current();
+        rt.block_on(async move {
+            let token = self.get_valid_access_token().await?;
+
+            let resp = client
+                .delete(format!("{}/me/events/{}", GRAPH_BASE, event_id))
+                .header("Authorization", format!("Bearer {}", token))
+                .send()
+                .await
+                .map_err(|e| format!("Graph delete request failed: {}", e))?;
+
+            if !resp.status().is_success() {
+                let body: serde_json::Value =
+                    resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+                return Err(format!(
+                    "Graph error: {}",
+                    body.get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("unknown")
+                ));
+            }
+            Ok(())
+        })
+    }
+
+    pub fn update_event(
+        &self,
+        event_id: &str,
+        title: &str,
+        start_iso: &str,
+        body: &str,
+        duration_minutes: i64,
+    ) -> Result<(), String> {
+        let client = self.client.clone();
+        let start = start_iso.to_string();
+        let title = title.to_string();
+        let body = body.to_string();
+        let event_id = event_id.to_string();
+
+        let start_dt = chrono::DateTime::parse_from_rfc3339(&start)
+            .map_err(|e| format!("Invalid start time: {}", e))?;
+        let end_dt = start_dt + chrono::Duration::minutes(duration_minutes);
+        let end = end_dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+
+        let event_body = serde_json::json!({
+            "subject": title,
+            "body": {
+                "contentType": "Text",
+                "content": body
+            },
+            "start": {
+                "dateTime": start,
+                "timeZone": "UTC"
+            },
+            "end": {
+                "dateTime": end,
+                "timeZone": "UTC"
+            },
+            "reminderMinutesBeforeStart": 0,
+            "isReminderOn": true
+        });
+
+        let rt = tokio::runtime::Handle::current();
+        rt.block_on(async move {
+            let token = self.get_valid_access_token().await?;
+
+            let resp = client
+                .patch(format!("{}/me/events/{}", GRAPH_BASE, event_id))
+                .header("Authorization", format!("Bearer {}", token))
+                .header("Content-Type", "application/json")
+                .json(&event_body)
+                .send()
+                .await
+                .map_err(|e| format!("Graph update request failed: {}", e))?;
+
+            if !resp.status().is_success() {
+                let body: serde_json::Value =
+                    resp.json().await.map_err(|e| format!("Parse error: {}", e))?;
+                return Err(format!(
+                    "Graph error: {}",
+                    body.get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("unknown")
+                ));
+            }
+            Ok(())
         })
     }
 }
