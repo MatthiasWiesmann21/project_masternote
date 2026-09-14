@@ -18,12 +18,17 @@
     loadNotes,
     activeTagFilter,
     activeCategoryFilter,
+    activeContactFilter,
+    activeCoworkerFilter,
+    dateFrom,
+    dateTo,
     tags,
     categories,
     timeRangeSort,
     lastError,
     showArchived,
-    selectedNoteIds
+    selectedNoteIds,
+    searchQuery
   } from '$lib/stores/notes';
   import { settings } from '$lib/stores/settings';
   import * as api from '$lib/api';
@@ -40,6 +45,32 @@
   let showShortcutHelp = $state(false);
   let showQuickCapture = $state(false);
   let statistics = $state<api.NoteStatistics | null>(null);
+  let contactList = $state<api.Contact[]>([]);
+  let coworkerList = $state<api.Coworker[]>([]);
+  let contactFilterQuery = $state('');
+  let coworkerFilterQuery = $state('');
+
+  let filteredContactList = $derived.by(() => {
+    const q = contactFilterQuery.trim().toLowerCase();
+    if (!q) return contactList;
+    return contactList.filter((c) => {
+      const name = c.kind === 'company' && c.companyName
+        ? c.companyName
+        : [c.firstName, c.lastName].filter(Boolean).join(' ');
+      return name.toLowerCase().includes(q) ||
+        (c.customerIdentifier ?? '').toLowerCase().includes(q) ||
+        (c.email ?? '').toLowerCase().includes(q);
+    });
+  });
+
+  let filteredCoworkerList = $derived.by(() => {
+    const q = coworkerFilterQuery.trim().toLowerCase();
+    if (!q) return coworkerList;
+    return coworkerList.filter((c) => {
+      const name = [c.firstName, c.lastName].filter(Boolean).join(' ');
+      return name.toLowerCase().includes(q) || (c.email ?? '').toLowerCase().includes(q);
+    });
+  });
 
   // Hotkey settings
   let openHotkey = $state('Ctrl+Shift+M');
@@ -132,6 +163,12 @@
     }
     await refreshAll();
     loadStatistics();
+    try {
+      contactList = await api.listContacts();
+      coworkerList = await api.listCoworkers();
+    } catch (e) {
+      console.error('Failed to load contacts/coworkers:', e);
+    }
     newNoteAndFocus();
   });
 
@@ -150,9 +187,21 @@
     activeCategoryFilter.update((v) => (v === catId ? null : catId));
   }
 
+  function toggleContactFilter(contactId: number) {
+    activeContactFilter.update((v) => (v === contactId ? null : contactId));
+  }
+
+  function toggleCoworkerFilter(coworkerId: number) {
+    activeCoworkerFilter.update((v) => (v === coworkerId ? null : coworkerId));
+  }
+
   function clearFilters() {
     activeTagFilter.set(null);
     activeCategoryFilter.set(null);
+    activeContactFilter.set(null);
+    activeCoworkerFilter.set(null);
+    dateFrom.set(null);
+    dateTo.set(null);
   }
 
   async function handleHide() {
@@ -278,7 +327,14 @@
     }
   }
 
-  let hasFilters = $derived($activeTagFilter !== null || $activeCategoryFilter !== null);
+  let hasFilters = $derived(
+    $activeTagFilter !== null ||
+    $activeCategoryFilter !== null ||
+    $activeContactFilter !== null ||
+    $activeCoworkerFilter !== null ||
+    $dateFrom !== null ||
+    $dateTo !== null
+  );
 </script>
 
 <svelte:window
@@ -296,7 +352,13 @@
       showQuickCapture = true;
     }
     if (e.key === 'Escape') {
-      handleHide();
+      // Don't hide if a dialog or search dropdown is open
+      const isDialogOpen = showSettings || showCategoryDialog || showContactDialog ||
+        showCoworkerDialog || showShortcutHelp || showQuickCapture ||
+        $showFilterDropdown;
+      if (!isDialogOpen && !$searchQuery) {
+        handleHide();
+      }
     }
   }}
 />
@@ -545,7 +607,7 @@
         {/if}
 
         {#if $tags.length > 0}
-          <div>
+          <div class="mb-2">
             <div class="text-[10px] text-fg-muted mb-1 font-medium">Tags</div>
             <div class="flex gap-1 flex-wrap">
               {#each $tags as tag}
@@ -559,6 +621,83 @@
             </div>
           </div>
         {/if}
+
+        {#if contactList.length > 0}
+          <div class="mb-2">
+            <div class="text-[10px] text-fg-muted mb-1 font-medium">Customers ({contactList.length})</div>
+            {#if contactList.length > 8}
+              <input
+                bind:value={contactFilterQuery}
+                placeholder="Search customers…"
+                class="w-full text-[10px] bg-bg-muted rounded px-1.5 py-1 border border-border outline-none mb-1"
+              />
+            {/if}
+            <div class="flex gap-1 flex-wrap max-h-24 overflow-y-auto">
+              {#each filteredContactList as c (c.id)}
+                <button
+                  onclick={() => toggleContactFilter(c.id)}
+                  class="text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap transition {$activeContactFilter === c.id ? 'bg-accent text-accent-fg' : 'bg-bg-muted text-fg-muted hover:bg-border'}"
+                >
+                  👤 {c.kind === 'company' && c.companyName ? c.companyName : [c.firstName, c.lastName].filter(Boolean).join(' ')}
+                </button>
+              {/each}
+              {#if filteredContactList.length === 0}
+                <span class="text-[10px] text-fg-muted">No matches</span>
+              {/if}
+            </div>
+          </div>
+        {/if}
+
+        {#if coworkerList.length > 0}
+          <div class="mb-2">
+            <div class="text-[10px] text-fg-muted mb-1 font-medium">Coworkers ({coworkerList.length})</div>
+            {#if coworkerList.length > 8}
+              <input
+                bind:value={coworkerFilterQuery}
+                placeholder="Search coworkers…"
+                class="w-full text-[10px] bg-bg-muted rounded px-1.5 py-1 border border-border outline-none mb-1"
+              />
+            {/if}
+            <div class="flex gap-1 flex-wrap max-h-24 overflow-y-auto">
+              {#each filteredCoworkerList as c (c.id)}
+                <button
+                  onclick={() => toggleCoworkerFilter(c.id)}
+                  class="text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap transition {$activeCoworkerFilter === c.id ? 'bg-accent text-accent-fg' : 'bg-bg-muted text-fg-muted hover:bg-border'}"
+                >
+                  🤝 {[c.firstName, c.lastName].filter(Boolean).join(' ')}
+                </button>
+              {/each}
+              {#if filteredCoworkerList.length === 0}
+                <span class="text-[10px] text-fg-muted">No matches</span>
+              {/if}
+            </div>
+          </div>
+        {/if}
+
+        <div class="mb-2">
+          <div class="text-[10px] text-fg-muted mb-1 font-medium">Date range</div>
+          <div class="flex items-center gap-1">
+            <input
+              type="date"
+              value={$dateFrom ?? ''}
+              onchange={(e) => dateFrom.set((e.target as HTMLInputElement).value || null)}
+              class="text-[10px] bg-bg-muted rounded px-1.5 py-1 border border-border outline-none flex-1"
+            />
+            <span class="text-fg-muted text-[10px]">to</span>
+            <input
+              type="date"
+              value={$dateTo ?? ''}
+              onchange={(e) => dateTo.set((e.target as HTMLInputElement).value || null)}
+              class="text-[10px] bg-bg-muted rounded px-1.5 py-1 border border-border outline-none flex-1"
+            />
+          </div>
+          {#if $dateFrom || $dateTo}
+            <button
+              onclick={() => { dateFrom.set(null); dateTo.set(null); }}
+              class="text-[10px] text-fg-muted hover:text-fg mt-1"
+            >clear dates</button>
+          {/if}
+        </div>
       </div>
     {/if}
   </div>

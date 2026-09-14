@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Note, Coworker } from '$lib/api';
   import * as api from '$lib/api';
-  import { categories, saveNote, selectedNoteId, removeNote, notes, filteredNotes } from '$lib/stores/notes';
+  import { categories, saveNote, selectedNoteId, removeNote, notes, filteredNotes, loadNotes } from '$lib/stores/notes';
   import { settings } from '$lib/stores/settings';
   import { save as saveDialog } from '@tauri-apps/plugin-dialog';
   import { marked } from 'marked';
@@ -26,6 +26,7 @@
   let showDeleteConfirm = $state(false);
   let showCopyConfirm = $state(false);
   let showArchiveConfirm = $state(false);
+  let showUnarchiveConfirm = $state(false);
   let copyStatus = $state('');
   let rapportCoworkerQuery = $state('');
   let rapportCoworkerResults = $state<Coworker[]>([]);
@@ -143,6 +144,18 @@
       await api.archiveNote(note.id);
       showArchiveConfirm = false;
       newNote();
+      await loadNotes();
+    } catch (e: any) {
+      errorMsg = e?.message ?? String(e);
+    }
+  }
+
+  async function handleUnarchive() {
+    if (!note) return;
+    try {
+      await api.unarchiveNote(note.id);
+      showUnarchiveConfirm = false;
+      await loadNotes();
     } catch (e: any) {
       errorMsg = e?.message ?? String(e);
     }
@@ -215,6 +228,28 @@
       graphStatus = '';
       errorMsg = e?.message ?? String(e);
     }
+  }
+
+  async function handleRapportClick() {
+    if (!note) return;
+    // If a coworker is already linked to the note and has an email, skip the picker
+    if (note.coworker?.email) {
+      graphStatus = 'Opening Outlook…';
+      try {
+        await api.openTelephoneRapport(note.id, note.coworker.email);
+        graphStatus = 'Outlook opened';
+        setTimeout(() => (graphStatus = ''), 3000);
+      } catch (e: any) {
+        graphStatus = '';
+        errorMsg = e?.message ?? String(e);
+      }
+      return;
+    }
+    // Otherwise show the picker dialog
+    rapportCoworker = null;
+    rapportCoworkerQuery = '';
+    rapportCoworkerResults = [];
+    showRapportDialog = true;
   }
 
   async function handleCreateCalendar() {
@@ -358,31 +393,28 @@
       >
         Reminder
       </button>
-      {#if contactId}
+      {#if contactId || coworkerId}
         <button
-          onclick={() => {
-            rapportCoworker = null;
-            rapportCoworkerQuery = '';
-            rapportCoworkerResults = [];
-            showRapportDialog = true;
-          }}
+          onclick={handleRapportClick}
           class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
           title="Open Outlook with telephone rapport"
         >
           📧 Rapport
         </button>
-        <button
-          onclick={() => {
-            const now = new Date();
-            calendarDate = now.toISOString().slice(0, 10);
-            calendarTime = `${String(now.getHours()).padStart(2, '0')}:00`;
-            showCalendarDialog = true;
-          }}
-          class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
-          title="Create Outlook calendar entry with contact"
-        >
-          📅 Calendar
-        </button>
+        {#if contactId}
+          <button
+            onclick={() => {
+              const now = new Date();
+              calendarDate = now.toISOString().slice(0, 10);
+              calendarTime = `${String(now.getHours()).padStart(2, '0')}:00`;
+              showCalendarDialog = true;
+            }}
+            class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
+            title="Create Outlook calendar entry with contact"
+          >
+            📅 Calendar
+          </button>
+        {/if}
       {/if}
       <button
         onclick={() => (showPreview = !showPreview)}
@@ -398,13 +430,23 @@
       >
         ↧ Export
       </button>
-      <button
-        onclick={() => (showArchiveConfirm = true)}
-        class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
-        title="Archive this note"
-      >
-        📦 Archive
-      </button>
+      {#if note.archived}
+        <button
+          onclick={() => (showUnarchiveConfirm = true)}
+          class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
+          title="Restore this note from archive"
+        >
+          📤 Unarchive
+        </button>
+      {:else}
+        <button
+          onclick={() => (showArchiveConfirm = true)}
+          class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
+          title="Archive this note"
+        >
+          📦 Archive
+        </button>
+      {/if}
       <button
         onclick={() => (showCopyConfirm = true)}
         class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition ml-auto"
@@ -637,6 +679,34 @@
       <div class="flex gap-2 justify-end">
         <button onclick={() => (showArchiveConfirm = false)} class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border">Cancel</button>
         <button onclick={handleArchive} class="text-xs px-3 py-1.5 rounded bg-accent text-accent-fg font-medium hover:opacity-90">Archive</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showUnarchiveConfirm && note}
+  <div
+    class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+    role="button"
+    tabindex="-1"
+    onclick={() => (showUnarchiveConfirm = false)}
+    onkeydown={(e) => { if (e.key === 'Escape') showUnarchiveConfirm = false; }}
+  >
+    <div
+      class="bg-bg rounded-lg shadow-2xl border border-border w-[360px] p-4 space-y-3"
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+    >
+      <h3 class="text-sm font-semibold">📤 Unarchive Note</h3>
+      <p class="text-xs text-fg-muted">
+        Restore "{note.title || 'Untitled'}" from the archive? It will be visible in the default note list again.
+      </p>
+      <div class="flex gap-2 justify-end">
+        <button onclick={() => (showUnarchiveConfirm = false)} class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border">Cancel</button>
+        <button onclick={handleUnarchive} class="text-xs px-3 py-1.5 rounded bg-accent text-accent-fg font-medium hover:opacity-90">Unarchive</button>
       </div>
     </div>
   </div>

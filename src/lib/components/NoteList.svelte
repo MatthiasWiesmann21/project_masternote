@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Note } from '$lib/api';
-  import { selectedNoteId, activeTagFilter, activeCategoryFilter, searchQuery, timeRangeSort, filteredNotes, showArchived, selectedNoteIds } from '$lib/stores/notes';
+  import { selectedNoteId, activeTagFilter, activeCategoryFilter, activeContactFilter, activeCoworkerFilter, dateFrom, dateTo, searchQuery, timeRangeSort, filteredNotes, showArchived, selectedNoteIds } from '$lib/stores/notes';
   import * as api from '$lib/api';
 
   let { notes } = $props<{ notes: Note[] }>();
@@ -11,14 +11,37 @@
     if (!$showArchived) {
       result = result.filter((n: Note) => !n.archived);
     }
+    // Search query filtering (title and content)
+    const q = $searchQuery.trim().toLowerCase();
+    if (q) {
+      result = result.filter((n: Note) =>
+        n.title.toLowerCase().includes(q) || n.content.toLowerCase().includes(q)
+      );
+    }
     if ($activeTagFilter) {
       result = result.filter((n: Note) => n.tags.some((t) => t.name === $activeTagFilter));
     }
     if ($activeCategoryFilter !== null) {
       result = result.filter((n: Note) => n.categoryId === $activeCategoryFilter);
     }
+    if ($activeContactFilter !== null) {
+      result = result.filter((n: Note) => n.contactId === $activeContactFilter);
+    }
+    if ($activeCoworkerFilter !== null) {
+      result = result.filter((n: Note) => n.coworkerId === $activeCoworkerFilter);
+    }
 
-    // Time range filtering
+    // Date range filtering
+    if ($dateFrom) {
+      const fromTime = new Date($dateFrom + 'T00:00:00').getTime();
+      result = result.filter((n: Note) => new Date(n.createdAt).getTime() >= fromTime);
+    }
+    if ($dateTo) {
+      const toTime = new Date($dateTo + 'T23:59:59').getTime();
+      result = result.filter((n: Note) => new Date(n.createdAt).getTime() <= toTime);
+    }
+
+    // Time range filtering (preset)
     const sort = $timeRangeSort;
     const now = new Date();
     if (sort === 'today') {

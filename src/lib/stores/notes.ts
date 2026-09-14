@@ -9,6 +9,10 @@ export const selectedNoteId = writable<number | null>(null);
 export const searchQuery = writable('');
 export const activeTagFilter = writable<string | null>(null);
 export const activeCategoryFilter = writable<number | null>(null);
+export const activeContactFilter = writable<number | null>(null);
+export const activeCoworkerFilter = writable<number | null>(null);
+export const dateFrom = writable<string | null>(null);
+export const dateTo = writable<string | null>(null);
 export const timeRangeSort = writable<'newest' | 'oldest' | 'today' | 'week'>('newest');
 export const filteredNotes = writable<Note[]>([]);
 export const isLoading = writable(false);
@@ -19,7 +23,7 @@ export const selectedNoteIds = writable<Set<number>>(new Set());
 export async function loadNotes() {
   isLoading.set(true);
   try {
-    const result = await api.listNotes(200, 0);
+    const result = await api.listNotes(500, 0);
     notes.set(result);
   } catch (e: any) {
     const msg = e?.message ?? String(e);

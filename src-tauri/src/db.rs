@@ -439,16 +439,52 @@ impl Database {
 
     pub fn search_notes(&self, query: &str, limit: i64) -> Result<Vec<SearchResult>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
+
+        // Build a safe FTS5 query: wrap each word in double quotes for prefix matching
+        // This prevents FTS5 syntax errors from special characters
+        let fts_query: String = query
+            .split_whitespace()
+            .map(|w| format!("\"{}\"*", w.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        // Try FTS5 first
+        if !fts_query.is_empty() {
+            let mut stmt = conn.prepare(
+                "SELECT n.id, n.title, n.content, snippet(notes_fts, 1, '<mark>', '</mark>', '…', 20) as snippet, n.updated_at
+                 FROM notes_fts
+                 JOIN notes n ON n.id = notes_fts.rowid
+                 WHERE notes_fts MATCH ?1
+                 ORDER BY rank
+                 LIMIT ?2",
+            )?;
+            let results = stmt
+                .query_map(params![fts_query, limit], |row| {
+                    Ok(SearchResult {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        content: row.get(2)?,
+                        snippet: row.get(3)?,
+                        updated_at: row.get(4)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            if !results.is_empty() {
+                return Ok(results);
+            }
+        }
+
+        // Fallback: LIKE-based substring search on title and content
+        let like_pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
         let mut stmt = conn.prepare(
-            "SELECT n.id, n.title, n.content, snippet(notes_fts, 1, '<mark>', '</mark>', '…', 20) as snippet, n.updated_at
-             FROM notes_fts
-             JOIN notes n ON n.id = notes_fts.rowid
-             WHERE notes_fts MATCH ?1
-             ORDER BY rank
+            "SELECT id, title, content, substr(content, 1, 200) as snippet, updated_at
+             FROM notes
+             WHERE title LIKE ?1 ESCAPE '\\' OR content LIKE ?1 ESCAPE '\\'
+             ORDER BY updated_at DESC
              LIMIT ?2",
         )?;
         let results = stmt
-            .query_map(params![query, limit], |row| {
+            .query_map(params![like_pattern, limit], |row| {
                 Ok(SearchResult {
                     id: row.get(0)?,
                     title: row.get(1)?,

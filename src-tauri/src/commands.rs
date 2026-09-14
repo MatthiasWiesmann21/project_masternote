@@ -79,7 +79,8 @@ pub fn list_notes(
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<Note>, String> {
-    db.list_notes(limit.unwrap_or(100), offset.unwrap_or(0))
+    // Always include archived notes; the frontend filters them based on user preference
+    db.list_notes_filtered(limit.unwrap_or(500), offset.unwrap_or(0), true)
         .map_err(user_error)
 }
 
@@ -518,34 +519,43 @@ pub fn open_telephone_rapport(
     to_email: String,
 ) -> Result<(), String> {
     let note = db.get_note(note_id).map_err(user_error)?;
-    let contact = note.contact.as_ref().ok_or("No contact linked to this note")?;
 
-    let subject = format!(
-        "Telephone rapport — {} {}",
-        contact.first_name, contact.last_name
-    );
+    // Build subject — use contact name if available, otherwise note title
+    let subject = if let Some(ref contact) = note.contact {
+        format!(
+            "Telephone rapport — {} {}",
+            contact.first_name, contact.last_name
+        )
+    } else {
+        format!("Telephone rapport — {}", note.title)
+    };
 
-    // Build contact info line: ID, phone, mobile comma-separated
-    let mut info_parts: Vec<String> = Vec::new();
-    if let Some(ref id) = contact.customer_identifier {
-        info_parts.push(id.clone());
-    }
-    if let Some(ref phone) = contact.phone {
-        info_parts.push(phone.clone());
-    }
-    if let Some(ref mobile) = contact.mobile {
-        info_parts.push(mobile.clone());
-    }
-
-    let mut body = format!("Contact: {} {}", contact.first_name, contact.last_name);
-    if let Some(ref company) = contact.company_name {
-        body.push_str(&format!("\nCompany: {}", company));
-    }
-    if !info_parts.is_empty() {
-        body.push_str(&format!("\n{}", info_parts.join(", ")));
-    }
-    if let Some(ref email) = contact.email {
-        body.push_str(&format!("\n{}", email));
+    // Build body — contact info is optional
+    let mut body = String::new();
+    if let Some(ref contact) = note.contact {
+        body.push_str(&format!("Contact: {} {}", contact.first_name, contact.last_name));
+        if let Some(ref company) = contact.company_name {
+            body.push_str(&format!("\nCompany: {}", company));
+        }
+        // Build contact info line: ID, phone, mobile comma-separated
+        let mut info_parts: Vec<String> = Vec::new();
+        if let Some(ref id) = contact.customer_identifier {
+            info_parts.push(id.clone());
+        }
+        if let Some(ref phone) = contact.phone {
+            info_parts.push(phone.clone());
+        }
+        if let Some(ref mobile) = contact.mobile {
+            info_parts.push(mobile.clone());
+        }
+        if !info_parts.is_empty() {
+            body.push_str(&format!("\n{}", info_parts.join(", ")));
+        }
+        if let Some(ref email) = contact.email {
+            body.push_str(&format!("\n{}", email));
+        }
+    } else {
+        body.push_str("No contact linked");
     }
     body.push_str(&format!("\n\nPlease Recall!\n{}", note.content));
 
