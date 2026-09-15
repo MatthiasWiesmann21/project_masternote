@@ -2,6 +2,7 @@ pub mod commands;
 pub mod db;
 pub mod graph;
 pub mod hotkey;
+pub mod i18n;
 pub mod models;
 pub mod reminders;
 
@@ -148,6 +149,8 @@ pub fn run() {
             commands::update_calendar_event,
             commands::archive_note,
             commands::unarchive_note,
+            commands::pin_note,
+            commands::unpin_note,
             commands::reorder_note,
             commands::link_notes,
             commands::unlink_notes,

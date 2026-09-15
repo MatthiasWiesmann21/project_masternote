@@ -1,6 +1,9 @@
 <script lang="ts">
   import * as api from '$lib/api';
   import { categories } from '$lib/stores/notes';
+  import Modal from '$lib/components/ui/Modal.svelte';
+  import { Zap } from '@lucide/svelte';
+  import { t } from '$lib/i18n';
 
   let { onClose, onSaved } = $props<{ onClose: () => void; onSaved: () => void }>();
 
@@ -33,59 +36,42 @@
       e.preventDefault();
       handleSave();
     }
-    if (e.key === 'Escape') {
-      onClose();
-    }
   }
 </script>
 
-<svelte:window on:keydown={(e) => { if (e.key === 'Escape') onClose(); }} />
+<Modal onClose={onClose} width="w-96" title={$t('quick.title')}>
+  {#snippet icon()}<Zap class="w-4 h-4" />{/snippet}
 
-<div
-  class="fixed inset-0 bg-black/30 flex items-start justify-center pt-20 z-50"
-  role="button"
-  tabindex="-1"
-  onclick={onClose}
-  onkeydown={(e) => { if (e.key === 'Escape') onClose(); }}
->
-  <div
-    class="bg-bg rounded-lg shadow-xl border border-border p-3 w-96"
-    role="dialog"
-    aria-modal="true"
-    tabindex="-1"
-    onclick={(e) => e.stopPropagation()}
-    onkeydown={(e) => e.stopPropagation()}
-  >
-    <div class="flex items-center justify-between mb-2">
-      <h3 class="text-sm font-semibold">⚡ Quick Capture</h3>
-      <button onclick={onClose} class="text-fg-muted hover:text-fg text-xs">✕</button>
-    </div>
-
+  <div class="p-4 space-y-3">
     <textarea
       bind:this={inputEl}
       bind:value={text}
       onkeydown={handleKeydown}
-      placeholder="Type a note and press Enter to save…"
-      class="w-full text-sm bg-bg-muted rounded px-2 py-1.5 border border-border outline-none resize-none h-24"
+      placeholder={$t('quick.placeholder')}
+      class="w-full text-sm bg-bg-muted rounded-lg px-2.5 py-2 border border-border outline-none resize-none h-28 focus:border-accent focus:ring-2 focus:ring-accent/20 placeholder:text-fg-muted"
     ></textarea>
 
-    <div class="flex items-center gap-2 mt-2">
+    <div class="flex items-center gap-2">
       <select
         bind:value={categoryId}
-        class="text-xs bg-bg-muted rounded px-2 py-1 border border-border flex-1"
+        class="text-xs bg-bg-muted rounded-lg px-2 py-1.5 border border-border flex-1 outline-none focus:border-accent"
       >
-        <option value={null}>No category</option>
+        <option value={null}>{$t('quick.noCategory')}</option>
         {#each $categories as cat}
           <option value={cat.id}>{cat.name}</option>
         {/each}
       </select>
-      <button
-        onclick={handleSave}
-        disabled={saving || !text.trim()}
-        class="text-xs px-3 py-1.5 rounded bg-accent text-accent-fg font-medium hover:opacity-90 disabled:opacity-50"
-      >
-        {saving ? 'Saving…' : 'Save (Enter)'}
-      </button>
     </div>
   </div>
-</div>
+
+  {#snippet footer()}
+    <button onclick={onClose} class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition">{$t('common.cancel')}</button>
+    <button
+      onclick={handleSave}
+      disabled={saving || !text.trim()}
+      class="text-xs px-3 py-1.5 rounded-lg bg-accent text-accent-fg font-medium hover:bg-accent-dark transition disabled:opacity-50"
+    >
+      {saving ? $t('quick.saving') : $t('quick.save')}
+    </button>
+  {/snippet}
+</Modal>

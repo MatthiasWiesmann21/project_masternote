@@ -64,6 +64,7 @@ impl Database {
             (7, include_str!("../migrations/0007_note_templates.sql")),
             (8, include_str!("../migrations/0008_note_links.sql")),
             (9, include_str!("../migrations/0009_saved_searches.sql")),
+            (10, include_str!("../migrations/0010_note_pinning.sql")),
         ];
 
         let current_version: i64 = conn
@@ -213,6 +214,7 @@ impl Database {
             contact: None,
             coworker: None,
             archived: row.get(11)?,
+            pinned: row.get(13)?,
             sort_order: row.get(12)?,
             links: vec![],
             backlinks: vec![],
@@ -222,7 +224,7 @@ impl Database {
     const NOTE_SELECT: &'static str =
         "SELECT n.id, n.title, n.content, n.category_id, c.name, c.color, \
          n.created_at, n.updated_at, n.source, n.contact_id, n.coworker_id, \
-         n.archived, n.sort_order \
+         n.archived, n.sort_order, n.pinned \
          FROM notes n \
          LEFT JOIN categories c ON n.category_id = c.id";
 
@@ -363,9 +365,9 @@ impl Database {
     ) -> Result<Vec<Note>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let sql = if include_archived {
-            format!("{} ORDER BY n.sort_order ASC, n.updated_at DESC LIMIT ?1 OFFSET ?2", Self::NOTE_SELECT)
+            format!("{} ORDER BY n.pinned DESC, n.sort_order ASC, n.updated_at DESC LIMIT ?1 OFFSET ?2", Self::NOTE_SELECT)
         } else {
-            format!("{} WHERE n.archived = 0 ORDER BY n.sort_order ASC, n.updated_at DESC LIMIT ?1 OFFSET ?2", Self::NOTE_SELECT)
+            format!("{} WHERE n.archived = 0 ORDER BY n.pinned DESC, n.sort_order ASC, n.updated_at DESC LIMIT ?1 OFFSET ?2", Self::NOTE_SELECT)
         };
         let mut stmt = conn.prepare(&sql)?;
         let mut notes = stmt
@@ -405,6 +407,18 @@ impl Database {
     pub fn unarchive_note(&self, id: i64) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         conn.execute("UPDATE notes SET archived = 0 WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn pin_note(&self, id: i64) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE notes SET pinned = 1 WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn unpin_note(&self, id: i64) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("UPDATE notes SET pinned = 0 WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -647,7 +661,7 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT r.id, r.note_id, r.due_at, r.fired, r.calendar_event_id, r.recur_interval, r.recur_unit,
                     n.id, n.title, n.content, n.category_id, n.created_at, n.updated_at, n.source,
-                    n.contact_id, n.coworker_id, n.archived, n.sort_order
+                    n.contact_id, n.coworker_id, n.archived, n.sort_order, n.pinned
              FROM reminders r
              JOIN notes n ON n.id = r.note_id
              WHERE r.fired = 0 AND r.due_at <= ?1",
@@ -680,6 +694,7 @@ impl Database {
                     contact: None,
                     coworker: None,
                     archived: row.get(16)?,
+                    pinned: row.get(18)?,
                     sort_order: row.get(17)?,
                     links: vec![],
                     backlinks: vec![],
@@ -1000,15 +1015,16 @@ impl Database {
         )?;
 
         let mut stmt = conn.prepare(
-            "SELECT c.name, COUNT(n.id) as cnt FROM categories c
+            "SELECT c.name, c.color, COUNT(n.id) as cnt FROM categories c
              LEFT JOIN notes n ON n.category_id = c.id AND n.archived = 0
-             GROUP BY c.id, c.name ORDER BY cnt DESC",
+             GROUP BY c.id, c.name, c.color ORDER BY cnt DESC",
         )?;
         let notes_per_category = stmt
             .query_map([], |row| {
                 Ok(CategoryCount {
                     name: row.get(0)?,
-                    count: row.get(1)?,
+                    color: row.get(1)?,
+                    count: row.get(2)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

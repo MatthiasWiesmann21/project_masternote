@@ -3,6 +3,9 @@
   import * as api from '$lib/api';
   import { categories, saveNote, selectedNoteId, removeNote, notes, filteredNotes, loadNotes } from '$lib/stores/notes';
   import { settings } from '$lib/stores/settings';
+  import { showToast } from '$lib/stores/toast';
+  import { t } from '$lib/i18n';
+  import { get } from 'svelte/store';
   import { save as saveDialog } from '@tauri-apps/plugin-dialog';
   import { marked } from 'marked';
   import TagPicker from './TagPicker.svelte';
@@ -10,6 +13,11 @@
   import ContactPicker from './ContactPicker.svelte';
   import CoworkerPicker from './CoworkerPicker.svelte';
   import CategoryPicker from './CategoryPicker.svelte';
+  import Modal from '$lib/components/ui/Modal.svelte';
+  import {
+    Save, FilePlus, Bell, Mail, Calendar, Eye, Pencil, Download,
+    Archive, ArchiveRestore, Copy, Trash2, AlertCircle, Pin, PinOff
+  } from '@lucide/svelte';
 
   let note = $state<Note | null>(null);
   let title = $state('');
@@ -106,7 +114,7 @@
       selectedNoteId.set(saved.id);
     }
     if (saved) {
-      saveStatus = 'Saved';
+      saveStatus = get(t)('editor.saved');
       setTimeout(() => (saveStatus = ''), 1500);
     } else {
       errorMsg = 'Save failed — check console for details';
@@ -143,7 +151,7 @@
         note.contactId,
         note.coworkerId
       );
-      copyStatus = 'Copied';
+      copyStatus = get(t)('editor.copied');
       setTimeout(() => (copyStatus = ''), 2000);
       showCopyConfirm = false;
       selectedNoteId.set(copied.id);
@@ -189,7 +197,7 @@
       if (path) {
         const format = path.endsWith('.txt') ? 'txt' : 'md';
         await api.exportNoteToFile(note.id, path, format);
-        saveStatus = 'Exported';
+        saveStatus = get(t)('editor.exported');
         setTimeout(() => (saveStatus = ''), 2000);
       }
     } catch (e: any) {
@@ -231,10 +239,10 @@
 
   async function handleOpenRapport() {
     if (!note || !rapportCoworker?.email) return;
-    graphStatus = 'Opening Outlook…';
+    graphStatus = get(t)('editor.openingOutlook');
     try {
       await api.openTelephoneRapport(note.id, rapportCoworker.email);
-      graphStatus = 'Outlook opened';
+      graphStatus = get(t)('editor.outlookOpened');
       showRapportDialog = false;
       rapportCoworker = null;
       rapportCoworkerQuery = '';
@@ -247,33 +255,44 @@
 
   async function handleRapportClick() {
     if (!note) return;
-    // If a coworker is already linked to the note and has an email, skip the picker
-    if (note.coworker?.email) {
-      graphStatus = 'Opening Outlook…';
-      try {
-        await api.openTelephoneRapport(note.id, note.coworker.email);
-        graphStatus = 'Outlook opened';
-        setTimeout(() => (graphStatus = ''), 3000);
-      } catch (e: any) {
-        graphStatus = '';
-        errorMsg = e?.message ?? String(e);
-      }
+    // No coworker linked at all → show the picker
+    if (!note.coworker?.email && !coworkerId) {
+      rapportCoworker = null;
+      rapportCoworkerQuery = '';
+      rapportCoworkerResults = [];
+      showRapportDialog = true;
       return;
     }
-    // Otherwise show the picker dialog
-    rapportCoworker = null;
-    rapportCoworkerQuery = '';
-    rapportCoworkerResults = [];
-    showRapportDialog = true;
+    // Resolve the email: enriched note coworker, or the just-selected coworkerId
+    let email = note.coworker?.email ?? null;
+    if (!email && coworkerId) {
+      try {
+        email = (await api.listCoworkers()).find((c) => c.id === coworkerId)?.email ?? null;
+      } catch { /* fall through to backend resolution */ }
+    }
+    // Open Outlook directly — backend falls back to the linked coworker's email
+    graphStatus = get(t)('editor.openingOutlook');
+    try {
+      await api.openTelephoneRapport(note.id, email);
+      graphStatus = get(t)('editor.outlookOpened');
+      setTimeout(() => (graphStatus = ''), 3000);
+    } catch (e: any) {
+      graphStatus = '';
+      // Coworker has no email — fall back to the picker dialog
+      rapportCoworker = null;
+      rapportCoworkerQuery = '';
+      rapportCoworkerResults = [];
+      showRapportDialog = true;
+    }
   }
 
   async function handleCreateCalendar() {
     if (!note) return;
-    graphStatus = 'Creating event…';
+    graphStatus = get(t)('editor.creatingEvent');
     const iso = `${calendarDate}T${calendarTime}:00`;
     try {
       await api.createCalendarWithContact(note.id, iso);
-      graphStatus = 'Calendar entry created (1h)';
+      graphStatus = get(t)('editor.calendarCreated');
       showCalendarDialog = false;
       setTimeout(() => (graphStatus = ''), 3000);
     } catch (e: any) {
@@ -340,13 +359,13 @@
 
 <div class="flex flex-col h-full">
   <!-- Title row + category -->
-  <div class="flex items-center gap-2 px-3 py-2 border-b border-border bg-bg-subtle">
+  <div class="flex items-center gap-2 px-3 py-2.5 border-b border-border bg-bg-subtle">
     <input
       bind:this={titleEl}
       bind:value={title}
       oninput={scheduleAutosave}
-      placeholder="Note title…"
-      class="flex-1 bg-transparent text-sm font-medium outline-none placeholder:text-fg-muted"
+      placeholder={$t('editor.title')}
+      class="flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-fg-muted"
     />
     <CategoryPicker
       bind:this={categoryPickerEl}
@@ -371,7 +390,7 @@
       bind:this={textareaEl}
       bind:value={content}
       oninput={scheduleAutosave}
-      placeholder="Write what you hear…  (Ctrl+S save, Ctrl+N new, Ctrl+Shift+T title, Ctrl+Shift+D desc, Ctrl+Shift+C cat, Ctrl+Shift+K contact, Ctrl+Shift+H coworker)"
+      placeholder={$t('editor.placeholder')}
       class="flex-1 w-full resize-none bg-transparent p-3 text-sm leading-relaxed outline-none placeholder:text-fg-muted font-mono"
     ></textarea>
   {/if}
@@ -383,38 +402,45 @@
   {/if}
 
   {#if errorMsg}
-    <div class="px-3 py-1 text-xs text-red-500 bg-red-500/10 border-t border-red-500/20">
+    <div class="px-3 py-1.5 text-xs text-danger bg-danger-soft border-t border-danger/20 flex items-center gap-1.5">
+      <AlertCircle class="w-3.5 h-3.5 shrink-0" />
       {errorMsg}
     </div>
   {/if}
 
-  <div class="flex items-center gap-2 px-3 py-2 border-t border-border bg-bg-subtle">
+  <!-- Toolbar -->
+  <div class="flex items-center gap-1 px-3 py-2 border-t border-border bg-bg-subtle">
     <button
       onclick={handleSaveNow}
-      class="text-xs px-3 py-1.5 rounded bg-accent text-accent-fg font-medium hover:opacity-90 transition"
+      class="text-xs px-3 py-1.5 rounded-lg bg-accent text-accent-fg font-medium hover:bg-accent-dark transition inline-flex items-center gap-1"
     >
-      Save
+      <Save class="w-3.5 h-3.5" />
+      {$t('editor.save')}
     </button>
     <button
       onclick={newNote}
-      class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
+      class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition inline-flex items-center gap-1"
     >
-      New
+      <FilePlus class="w-3.5 h-3.5" />
+      {$t('editor.new')}
     </button>
     {#if note}
       <button
         onclick={() => (showReminder = true)}
-        class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
+        class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition inline-flex items-center gap-1"
+        title={$t('editor.reminderTitle')}
       >
-        Reminder
+        <Bell class="w-3.5 h-3.5" />
+        {$t('editor.reminder')}
       </button>
       {#if contactId || coworkerId}
         <button
           onclick={handleRapportClick}
-          class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
-          title="Open Outlook with telephone rapport"
+          class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition inline-flex items-center gap-1"
+          title={$t('editor.rapportTitle')}
         >
-          📧 Rapport
+          <Mail class="w-3.5 h-3.5" />
+          {$t('editor.rapport')}
         </button>
         {#if contactId}
           <button
@@ -424,56 +450,87 @@
               calendarTime = `${String(now.getHours()).padStart(2, '0')}:00`;
               showCalendarDialog = true;
             }}
-            class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
-            title="Create Outlook calendar entry with contact"
+            class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition inline-flex items-center gap-1"
+            title={$t('editor.calendarTitle')}
           >
-            📅 Calendar
+            <Calendar class="w-3.5 h-3.5" />
+            {$t('editor.calendar')}
           </button>
         {/if}
       {/if}
       <button
         onclick={() => (showPreview = !showPreview)}
-        class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
-        title="Toggle Markdown preview"
+        class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition inline-flex items-center gap-1"
+        title={$t('editor.previewTitle')}
       >
-        {showPreview ? '✏ Edit' : '👁 Preview'}
+        {#if showPreview}
+          <Pencil class="w-3.5 h-3.5" />
+          {$t('editor.edit')}
+        {:else}
+          <Eye class="w-3.5 h-3.5" />
+          {$t('editor.preview')}
+        {/if}
       </button>
       <button
         onclick={handleExportNote}
-        class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
-        title="Export this note to file"
+        class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition inline-flex items-center gap-1"
+        title={$t('editor.exportTitle')}
       >
-        ↧ Export
+        <Download class="w-3.5 h-3.5" />
+        {$t('editor.export')}
       </button>
+      {#if note.pinned}
+        <button
+          onclick={async () => { try { await api.unpinNote(note!.id); await loadNotes(); } catch (e) { console.error('Unpin failed:', e); } }}
+          class="text-xs px-3 py-1.5 rounded-lg bg-accent-soft text-accent hover:bg-accent/20 transition inline-flex items-center gap-1"
+          title={$t('editor.unpinTitle')}
+        >
+          <PinOff class="w-3.5 h-3.5" />
+          {$t('editor.unpin')}
+        </button>
+      {:else}
+        <button
+          onclick={async () => { try { await api.pinNote(note!.id); await loadNotes(); } catch (e) { console.error('Pin failed:', e); } }}
+          class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition inline-flex items-center gap-1"
+          title={$t('editor.pinTitle')}
+        >
+          <Pin class="w-3.5 h-3.5" />
+          {$t('editor.pin')}
+        </button>
+      {/if}
       {#if note.archived}
         <button
           onclick={() => (showUnarchiveConfirm = true)}
-          class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
-          title="Restore this note from archive"
+          class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition inline-flex items-center gap-1"
+          title={$t('editor.unarchiveTitle')}
         >
-          📤 Unarchive
+          <ArchiveRestore class="w-3.5 h-3.5" />
+          {$t('editor.unarchive')}
         </button>
       {:else}
         <button
           onclick={() => (showArchiveConfirm = true)}
-          class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition"
-          title="Archive this note"
+          class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition inline-flex items-center gap-1"
+          title={$t('editor.archiveTitle')}
         >
-          📦 Archive
+          <Archive class="w-3.5 h-3.5" />
+          {$t('editor.archive')}
         </button>
       {/if}
       <button
         onclick={() => (showCopyConfirm = true)}
-        class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border transition ml-auto"
-        title="Duplicate this note"
+        class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition ml-auto inline-flex items-center gap-1"
+        title={$t('editor.copyTitle')}
       >
-        📋 Copy
+        <Copy class="w-3.5 h-3.5" />
+        {$t('editor.copy')}
       </button>
       <button
         onclick={() => (showDeleteConfirm = true)}
-        class="text-xs px-3 py-1.5 rounded text-red-500 hover:bg-red-500/10 transition"
+        class="text-xs px-3 py-1.5 rounded-lg text-danger hover:bg-danger-soft transition inline-flex items-center gap-1"
       >
-        Delete
+        <Trash2 class="w-3.5 h-3.5" />
+        {$t('editor.delete')}
       </button>
     {/if}
     {#if saveStatus}
@@ -486,43 +543,29 @@
 </div>
 
 {#if showRapportDialog && note}
-  <div
-    class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
-    role="button"
-    tabindex="-1"
-    onclick={() => (showRapportDialog = false)}
-    onkeydown={(e) => { if (e.key === 'Escape') showRapportDialog = false; }}
-  >
-    <div
-      class="bg-bg rounded-lg shadow-2xl border border-border w-[400px] p-4 space-y-3"
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
-    >
-      <h3 class="text-sm font-semibold">📧 Telephone Rapport</h3>
-
+  <Modal onClose={() => (showRapportDialog = false)} width="w-[400px]" title={$t('rapport.title')}>
+    {#snippet icon()}<Mail class="w-4 h-4" />{/snippet}
+    <div class="p-4 space-y-3">
       {#if rapportCoworker}
         <div class="flex items-center gap-1.5 text-xs">
           <span class="px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-600 whitespace-nowrap">
-            🤝 {[rapportCoworker.firstName, rapportCoworker.lastName].filter(Boolean).join(' ')}
+            {[rapportCoworker.firstName, rapportCoworker.lastName].filter(Boolean).join(' ')}
           </span>
           <span class="text-fg-muted">{rapportCoworker.email}</span>
           <button
             onclick={() => { rapportCoworker = null; }}
             class="text-fg-muted hover:text-red-500 text-[10px]"
-          >✕ change</button>
+          >{$t('rapport.change')}</button>
         </div>
       {:else}
         <div class="relative">
           <input
             bind:value={rapportCoworkerQuery}
-            placeholder="Search coworker to send to…"
-            class="text-xs bg-bg-muted rounded px-2 py-1.5 border border-border outline-none w-full"
+            placeholder={$t('rapport.search')}
+            class="text-xs bg-bg-muted rounded-lg px-2.5 py-1.5 border border-border outline-none w-full focus:border-accent focus:ring-2 focus:ring-accent/20"
           />
           {#if rapportCoworkerResults.length > 0}
-            <div class="absolute top-full left-0 right-0 mt-1 bg-bg rounded-lg border border-border shadow-lg max-h-48 overflow-y-auto z-50">
+            <div class="absolute top-full left-0 right-0 mt-1 bg-surface-1 rounded-xl border border-border shadow-lg max-h-48 overflow-y-auto z-50">
               {#each rapportCoworkerResults as c (c.id)}
                 <button
                   onmousedown={() => pickRapportCoworker(c)}
@@ -540,75 +583,61 @@
       {/if}
 
       <p class="text-[10px] text-fg-muted">
-        Opens Outlook with a pre-filled email containing the contact's phone/mobile, name, customer ID, and your note. You can review and send manually.
+        {$t('rapport.desc')}
       </p>
 
       {#if errorMsg}
-        <div class="text-xs text-red-500">{errorMsg}</div>
+        <div class="text-xs text-danger">{errorMsg}</div>
       {/if}
-
-      <div class="flex gap-2 justify-end">
-        <button onclick={() => (showRapportDialog = false)} class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border">Cancel</button>
-        <button
-          onclick={handleOpenRapport}
-          disabled={!rapportCoworker?.email}
-          class="text-xs px-3 py-1.5 rounded bg-accent text-accent-fg font-medium hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          Open Outlook
-        </button>
-      </div>
     </div>
-  </div>
+
+    {#snippet footer()}
+      <button onclick={() => (showRapportDialog = false)} class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition">{$t('common.cancel')}</button>
+      <button
+        onclick={handleOpenRapport}
+        disabled={!rapportCoworker?.email}
+        class="text-xs px-3 py-1.5 rounded-lg bg-accent text-accent-fg font-medium hover:bg-accent-dark transition disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        {$t('rapport.open')}
+      </button>
+    {/snippet}
+  </Modal>
 {/if}
 
 {#if showCalendarDialog && note}
-  <div
-    class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
-    role="dialog"
-    aria-modal="true"
-    tabindex="-1"
-    onclick={() => (showCalendarDialog = false)}
-    onkeydown={(e) => { if (e.key === 'Escape') showCalendarDialog = false; }}
-  >
-    <div
-      class="bg-bg rounded-lg shadow-2xl border border-border w-[400px] p-4 space-y-3"
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
-    >
-      <h3 class="text-sm font-semibold">📅 Create Calendar Entry</h3>
+  <Modal onClose={() => (showCalendarDialog = false)} width="w-[400px]" title={$t('calendar.title')}>
+    {#snippet icon()}<Calendar class="w-4 h-4" />{/snippet}
+    <div class="p-4 space-y-3">
       <p class="text-[10px] text-fg-muted">
-        Title: contact name + customer ID. Description: your note. Duration: 1 hour.
+        {$t('calendar.desc')}
       </p>
       <div class="flex gap-2">
         <label class="flex-1 flex flex-col gap-1">
-          <span class="text-[10px] text-fg-muted">Date</span>
+          <span class="text-[10px] text-fg-muted font-medium">{$t('calendar.date')}</span>
           <input
             bind:value={calendarDate}
             type="date"
-            class="text-sm bg-bg-muted rounded px-2 py-1.5 border border-border outline-none"
+            class="text-sm bg-bg-muted rounded-lg px-2.5 py-1.5 border border-border outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
           />
         </label>
         <label class="flex-1 flex flex-col gap-1">
-          <span class="text-[10px] text-fg-muted">Time</span>
+          <span class="text-[10px] text-fg-muted font-medium">{$t('calendar.time')}</span>
           <input
             bind:value={calendarTime}
             type="time"
-            class="text-sm bg-bg-muted rounded px-2 py-1.5 border border-border outline-none"
+            class="text-sm bg-bg-muted rounded-lg px-2.5 py-1.5 border border-border outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
           />
         </label>
       </div>
       {#if errorMsg}
-        <div class="text-xs text-red-500">{errorMsg}</div>
+        <div class="text-xs text-danger">{errorMsg}</div>
       {/if}
-      <div class="flex gap-2 justify-end">
-        <button onclick={() => (showCalendarDialog = false)} class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border">Cancel</button>
-        <button onclick={handleCreateCalendar} class="text-xs px-3 py-1.5 rounded bg-accent text-accent-fg font-medium hover:opacity-90">Create</button>
-      </div>
     </div>
-  </div>
+    {#snippet footer()}
+      <button onclick={() => (showCalendarDialog = false)} class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition">{$t('common.cancel')}</button>
+      <button onclick={handleCreateCalendar} class="text-xs px-3 py-1.5 rounded-lg bg-accent text-accent-fg font-medium hover:bg-accent-dark transition">{$t('calendar.create')}</button>
+    {/snippet}
+  </Modal>
 {/if}
 
 {#if showReminder && note}
@@ -616,113 +645,61 @@
 {/if}
 
 {#if showCopyConfirm && note}
-  <div
-    class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
-    role="button"
-    tabindex="-1"
-    onclick={() => (showCopyConfirm = false)}
-    onkeydown={(e) => { if (e.key === 'Escape') showCopyConfirm = false; }}
-  >
-    <div
-      class="bg-bg rounded-lg shadow-2xl border border-border w-[360px] p-4 space-y-3"
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
-    >
-      <h3 class="text-sm font-semibold">📋 Duplicate Note</h3>
+  <Modal onClose={() => (showCopyConfirm = false)} width="w-[360px]" title={$t('copy.title')}>
+    {#snippet icon()}<Copy class="w-4 h-4" />{/snippet}
+    <div class="p-4">
       <p class="text-xs text-fg-muted">
-        Create a copy of "{note.title || 'Untitled'}" with the same content, category, contact, and coworker?
+        {$t('copy.text', { title: note.title || $t('notes.untitled') })}
       </p>
-      <div class="flex gap-2 justify-end">
-        <button onclick={() => (showCopyConfirm = false)} class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border">Cancel</button>
-        <button onclick={handleCopy} class="text-xs px-3 py-1.5 rounded bg-accent text-accent-fg font-medium hover:opacity-90">Copy</button>
-      </div>
     </div>
-  </div>
+    {#snippet footer()}
+      <button onclick={() => (showCopyConfirm = false)} class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition">{$t('common.cancel')}</button>
+      <button onclick={handleCopy} class="text-xs px-3 py-1.5 rounded-lg bg-accent text-accent-fg font-medium hover:bg-accent-dark transition">{$t('copy.confirm')}</button>
+    {/snippet}
+  </Modal>
 {/if}
 
 {#if showDeleteConfirm && note}
-  <div
-    class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
-    role="button"
-    tabindex="-1"
-    onclick={() => (showDeleteConfirm = false)}
-    onkeydown={(e) => { if (e.key === 'Escape') showDeleteConfirm = false; }}
-  >
-    <div
-      class="bg-bg rounded-lg shadow-2xl border border-border w-[360px] p-4 space-y-3"
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
-    >
-      <h3 class="text-sm font-semibold text-red-500">🗑 Delete Note</h3>
+  <Modal onClose={() => (showDeleteConfirm = false)} width="w-[360px]" title={$t('delete.title')}>
+    {#snippet icon()}<Trash2 class="w-4 h-4 text-danger" />{/snippet}
+    <div class="p-4">
       <p class="text-xs text-fg-muted">
-        Delete "{note.title || 'Untitled'}"? This cannot be undone.
+        {$t('delete.text', { title: note.title || $t('notes.untitled') })}
       </p>
-      <div class="flex gap-2 justify-end">
-        <button onclick={() => (showDeleteConfirm = false)} class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border">Cancel</button>
-        <button onclick={handleDelete} class="text-xs px-3 py-1.5 rounded bg-red-500 text-white font-medium hover:opacity-90">Delete</button>
-      </div>
     </div>
-  </div>
+    {#snippet footer()}
+      <button onclick={() => (showDeleteConfirm = false)} class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition">{$t('common.cancel')}</button>
+      <button onclick={handleDelete} class="text-xs px-3 py-1.5 rounded-lg bg-danger text-white font-medium hover:opacity-90 transition">{$t('common.delete')}</button>
+    {/snippet}
+  </Modal>
 {/if}
 
 {#if showArchiveConfirm && note}
-  <div
-    class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
-    role="button"
-    tabindex="-1"
-    onclick={() => (showArchiveConfirm = false)}
-    onkeydown={(e) => { if (e.key === 'Escape') showArchiveConfirm = false; }}
-  >
-    <div
-      class="bg-bg rounded-lg shadow-2xl border border-border w-[360px] p-4 space-y-3"
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
-    >
-      <h3 class="text-sm font-semibold">📦 Archive Note</h3>
+  <Modal onClose={() => (showArchiveConfirm = false)} width="w-[360px]" title={$t('archive.title')}>
+    {#snippet icon()}<Archive class="w-4 h-4" />{/snippet}
+    <div class="p-4">
       <p class="text-xs text-fg-muted">
-        Archive "{note.title || 'Untitled'}"? Archived notes are hidden by default but can be shown via the filter.
+        {$t('archive.text', { title: note.title || $t('notes.untitled') })}
       </p>
-      <div class="flex gap-2 justify-end">
-        <button onclick={() => (showArchiveConfirm = false)} class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border">Cancel</button>
-        <button onclick={handleArchive} class="text-xs px-3 py-1.5 rounded bg-accent text-accent-fg font-medium hover:opacity-90">Archive</button>
-      </div>
     </div>
-  </div>
+    {#snippet footer()}
+      <button onclick={() => (showArchiveConfirm = false)} class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition">{$t('common.cancel')}</button>
+      <button onclick={handleArchive} class="text-xs px-3 py-1.5 rounded-lg bg-accent text-accent-fg font-medium hover:bg-accent-dark transition">{$t('archive.confirm')}</button>
+    {/snippet}
+  </Modal>
 {/if}
 
 {#if showUnarchiveConfirm && note}
-  <div
-    class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
-    role="button"
-    tabindex="-1"
-    onclick={() => (showUnarchiveConfirm = false)}
-    onkeydown={(e) => { if (e.key === 'Escape') showUnarchiveConfirm = false; }}
-  >
-    <div
-      class="bg-bg rounded-lg shadow-2xl border border-border w-[360px] p-4 space-y-3"
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
-    >
-      <h3 class="text-sm font-semibold">📤 Unarchive Note</h3>
+  <Modal onClose={() => (showUnarchiveConfirm = false)} width="w-[360px]" title={$t('unarchive.title')}>
+    {#snippet icon()}<ArchiveRestore class="w-4 h-4" />{/snippet}
+    <div class="p-4">
       <p class="text-xs text-fg-muted">
-        Restore "{note.title || 'Untitled'}" from the archive? It will be visible in the default note list again.
+        {$t('unarchive.text', { title: note.title || $t('notes.untitled') })}
       </p>
-      <div class="flex gap-2 justify-end">
-        <button onclick={() => (showUnarchiveConfirm = false)} class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border">Cancel</button>
-        <button onclick={handleUnarchive} class="text-xs px-3 py-1.5 rounded bg-accent text-accent-fg font-medium hover:opacity-90">Unarchive</button>
-      </div>
     </div>
-  </div>
+    {#snippet footer()}
+      <button onclick={() => (showUnarchiveConfirm = false)} class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition">{$t('common.cancel')}</button>
+      <button onclick={handleUnarchive} class="text-xs px-3 py-1.5 rounded-lg bg-accent text-accent-fg font-medium hover:bg-accent-dark transition">{$t('unarchive.confirm')}</button>
+    {/snippet}
+  </Modal>
 {/if}

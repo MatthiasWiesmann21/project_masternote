@@ -2,6 +2,7 @@
   import type { Tag } from '$lib/api';
   import * as api from '$lib/api';
   import { loadNotes, loadTags } from '$lib/stores/notes';
+  import { t } from '$lib/i18n';
 
   let { noteId, tags } = $props<{ noteId: number; tags: Tag[] }>();
 
@@ -47,7 +48,7 @@
       <button
         onclick={() => removeTag(tag.id)}
         class="hover:text-red-500 text-[9px] leading-none"
-        title="Remove tag"
+        title={$t('picker.removeTag')}
       >✕</button>
     </span>
   {/each}
@@ -55,7 +56,7 @@
     bind:this={inputEl}
     bind:value={newTag}
     onkeydown={onKeydown}
-    placeholder={tags.length === 0 ? 'add tag…' : ''}
+    placeholder={tags.length === 0 ? $t('picker.addTag') : ''}
     class="text-[10px] bg-transparent outline-none placeholder:text-fg-muted flex-1 min-w-16"
   />
 </div>

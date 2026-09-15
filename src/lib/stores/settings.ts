@@ -1,4 +1,6 @@
 import { writable } from 'svelte/store';
+import { Store } from '@tauri-apps/plugin-store';
+import { locale, type Locale } from '$lib/i18n';
 
 export interface Settings {
   theme: 'light' | 'dark' | 'system';
@@ -6,6 +8,7 @@ export interface Settings {
   defaultCategory: number | null;
   graphSignedIn: boolean;
   autosaveInterval: number;
+  language: Locale;
 }
 
 const defaultSettings: Settings = {
@@ -13,10 +16,24 @@ const defaultSettings: Settings = {
   hideOnBlur: true,
   defaultCategory: null,
   graphSignedIn: false,
-  autosaveInterval: 800
+  autosaveInterval: 800,
+  language: 'en'
 };
 
 export const settings = writable<Settings>(defaultSettings);
+
+let tauriStore: Store | null = null;
+
+/** Persist language to the Tauri store so the Rust backend can read it. */
+async function persistLanguage(lang: string) {
+  try {
+    tauriStore ??= await Store.load('settings.json');
+    await tauriStore.set('language', lang);
+    await tauriStore.save();
+  } catch {
+    // best-effort — backend falls back to 'en'
+  }
+}
 
 export function applyTheme(theme: 'light' | 'dark' | 'system') {
   const isDark =
@@ -44,6 +61,8 @@ export function initSettings() {
   settings.subscribe((s) => {
     localStorage.setItem('masternote-settings', JSON.stringify(s));
     applyTheme(s.theme);
+    locale.set(s.language);
+    persistLanguage(s.language);
   });
 
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {

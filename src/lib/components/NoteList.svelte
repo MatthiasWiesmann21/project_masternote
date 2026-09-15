@@ -2,6 +2,11 @@
   import type { Note } from '$lib/api';
   import { selectedNoteId, activeTagFilter, activeCategoryFilter, activeContactFilter, activeCoworkerFilter, dateFrom, dateTo, searchQuery, timeRangeSort, filteredNotes, showArchived, selectedNoteIds, loadNotes } from '$lib/stores/notes';
   import * as api from '$lib/api';
+  import Avatar from '$lib/components/ui/Avatar.svelte';
+  import Badge from '$lib/components/ui/Badge.svelte';
+  import { ArchiveRestore, Bell, FileText, Inbox, Pin } from '@lucide/svelte';
+  import { t } from '$lib/i18n';
+  import { get } from 'svelte/store';
 
   let { notes } = $props<{ notes: Note[] }>();
 
@@ -87,15 +92,37 @@
     const now = new Date();
     const diff = now.getTime() - d.getTime();
     const mins = Math.floor(diff / 60000);
-    if (mins < 1) return 'just now';
-    if (mins < 60) return `${mins}m ago`;
+    if (mins < 1) return get(t)('notes.justNow');
+    if (mins < 60) return get(t)('notes.minutesAgo', { count: mins });
     const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours}h ago`;
+    if (hours < 24) return get(t)('notes.hoursAgo', { count: hours });
+    const days = Math.floor(hours / 24);
+    if (days === 1) return get(t)('notes.yesterday');
+    if (days < 7) return get(t)('notes.daysAgo', { count: days });
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   }
 
   function preview(text: string): string {
     return text.replace(/[#*`_~\[\]()]/g, '').slice(0, 80);
+  }
+
+  function contactName(n: Note): string {
+    if (n.contact?.kind === 'company' && n.contact.companyName) return n.contact.companyName;
+    return [n.contact?.firstName, n.contact?.lastName].filter(Boolean).join(' ');
+  }
+
+  function coworkerName(n: Note): string {
+    return [n.coworker?.firstName, n.coworker?.lastName].filter(Boolean).join(' ');
+  }
+
+  function reminderColor(dueAt: string): 'red' | 'amber' | 'blue' {
+    const due = new Date(dueAt);
+    const now = new Date();
+    const diff = due.getTime() - now.getTime();
+    const hours = diff / (1000 * 60 * 60);
+    if (hours < 0) return 'red';
+    if (hours < 24) return 'amber';
+    return 'blue';
   }
 
   let lastClickedId = $state<number | null>(null);
@@ -132,78 +159,91 @@
 
 <div class="flex flex-col h-full overflow-hidden">
   {#if $selectedNoteIds.size > 0}
-    <div class="px-3 py-1.5 bg-bg-subtle border-b border-border flex items-center gap-2 text-[10px]">
-      <span class="text-fg-muted">{$selectedNoteIds.size} selected</span>
-      <button onclick={() => selectedNoteIds.set(new Set())} class="text-fg-muted hover:text-fg">clear</button>
+    <div class="px-3 py-1.5 bg-accent-soft border-b border-border flex items-center gap-2 text-[10px]">
+      <span class="text-accent font-medium">{$t('notes.selected', { count: $selectedNoteIds.size })}</span>
+      <button onclick={() => selectedNoteIds.set(new Set())} class="text-fg-muted hover:text-fg">{$t('common.clear')}</button>
     </div>
   {/if}
   <div class="flex-1 overflow-y-auto">
     {#if filtered.length === 0}
-      <div class="flex flex-col items-center justify-center h-full text-fg-muted text-xs px-4 text-center">
+      <div class="flex flex-col items-center justify-center h-full text-fg-muted text-xs px-4 text-center gap-2 py-8">
         {#if $searchQuery}
-          No notes found.
+          <Inbox class="w-8 h-8 opacity-40" />
+          <div>{$t('notes.emptySearch')}</div>
         {:else}
-          No notes yet.<br />Start typing above to capture one.
+          <FileText class="w-8 h-8 opacity-40" />
+          <div>{$t('notes.empty')}<br />{$t('notes.emptyHint')}</div>
         {/if}
       </div>
     {:else}
       {#each filtered as n (n.id)}
         <button
           onclick={(e) => handleClick(e, n)}
-          class="w-full text-left px-3 py-2.5 border-b border-border hover:bg-bg-subtle transition {$selectedNoteId === n.id ? 'bg-bg-subtle border-l-2 border-l-accent' : ''} {$selectedNoteIds.has(n.id) ? 'bg-accent/10' : ''}"
+          class="relative w-full text-left px-3 py-2.5 border-b border-border hover:bg-bg-subtle transition-all duration-150 {$selectedNoteId === n.id ? 'bg-accent-soft' : ''} {$selectedNoteIds.has(n.id) ? 'bg-accent/10' : ''} {n.archived ? 'opacity-60' : ''}"
         >
+          <!-- Category color strip -->
+          {#if n.categoryColor}
+            <span class="absolute left-0 top-0 bottom-0 w-1" style="background: {n.categoryColor}"></span>
+          {/if}
+
           <div class="flex items-start justify-between gap-2">
-            <span class="text-sm font-medium truncate flex-1">
-              {n.title || 'Untitled'}
-              {#if n.archived}
-                <span class="text-[10px] text-fg-muted ml-1">(archived)</span>
-                <span
-                  role="button"
-                  tabindex="0"
-                  onclick={(e) => unarchiveFromList(e, n)}
-                  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); unarchiveFromList(e as any, n); } }}
-                  class="text-[10px] text-accent hover:underline ml-1 cursor-pointer"
-                  title="Restore from archive"
-                >
-                  ↩ restore
-                </span>
+            <span class="text-sm font-medium truncate flex-1 {n.archived ? 'line-through' : ''}">
+              {n.title || $t('notes.untitled')}
+              {#if n.pinned}
+                <Pin class="w-3 h-3 text-accent inline-block ml-0.5 -mt-0.5" />
               {/if}
             </span>
             <span class="text-[10px] text-fg-muted whitespace-nowrap mt-0.5">
               {formatDate(n.updatedAt)}
             </span>
           </div>
+
           {#if n.content}
             <p class="text-xs text-fg-muted truncate mt-0.5">{preview(n.content)}</p>
           {/if}
-          <div class="flex items-center gap-1 mt-1 flex-wrap">
-            {#if n.categoryName}
+
+          <!-- Badges row -->
+          <div class="flex items-center gap-1 mt-1.5 flex-wrap">
+            {#if n.archived}
+              <Badge color="gray">
+                <ArchiveRestore class="w-2.5 h-2.5" />
+                {$t('notes.archived')}
+              </Badge>
               <span
-                class="text-[10px] px-1.5 py-0.5 rounded-full"
-                style="background: {n.categoryColor || '#888'}20; color: {n.categoryColor || '#888'}"
+                role="button"
+                tabindex="0"
+                onclick={(e) => unarchiveFromList(e, n)}
+                onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); unarchiveFromList(e as any, n); } }}
+                class="text-[10px] text-accent hover:underline cursor-pointer font-medium"
+                title={$t('notes.restoreTitle')}
               >
-                {n.categoryName}
+                {$t('notes.restore')}
               </span>
             {/if}
+            {#if n.categoryName}
+              <Badge color="accent">{n.categoryName}</Badge>
+            {/if}
             {#if n.contact}
-              <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400">
-                👤 {n.contact.kind === 'company' && n.contact.companyName ? n.contact.companyName : [n.contact.firstName, n.contact.lastName].filter(Boolean).join(' ')}
+              <span class="inline-flex items-center gap-1">
+                <Avatar name={contactName(n)} color="blue" size="xs" />
+                <span class="text-[10px] text-fg-muted truncate max-w-20">{contactName(n)}</span>
               </span>
             {/if}
             {#if n.coworker}
-              <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-600 dark:text-green-400">
-                🤝 {[n.coworker.firstName, n.coworker.lastName].filter(Boolean).join(' ')}
+              <span class="inline-flex items-center gap-1">
+                <Avatar name={coworkerName(n)} color="green" size="xs" />
+                <span class="text-[10px] text-fg-muted truncate max-w-20">{coworkerName(n)}</span>
               </span>
             {/if}
             {#each n.tags as tag}
-              <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-bg-muted text-fg-muted">
-                #{tag.name}
-              </span>
+              <Badge color="gray">#{tag.name}</Badge>
             {/each}
             {#if n.reminder}
-              <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
-                ⏰ {new Date(n.reminder.dueAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-              </span>
+              {@const color = reminderColor(n.reminder.dueAt)}
+              <Badge color={color}>
+                <Bell class="w-2.5 h-2.5" />
+                {new Date(n.reminder.dueAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              </Badge>
             {/if}
           </div>
         </button>

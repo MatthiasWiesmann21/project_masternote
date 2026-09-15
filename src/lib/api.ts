@@ -17,6 +17,7 @@ export interface Note {
   contact: Contact | null;
   coworker: Coworker | null;
   archived: boolean;
+  pinned: boolean;
   sortOrder: number;
   links: NoteLink[];
   backlinks: NoteLink[];
@@ -216,7 +217,7 @@ export const importContactsFromFile = (path: string) =>
   invoke<number>('import_contacts_from_file', { path });
 
 // Telephone rapport + calendar with contact
-export const openTelephoneRapport = (noteId: number, toEmail: string) =>
+export const openTelephoneRapport = (noteId: number, toEmail: string | null) =>
   invoke<void>('open_telephone_rapport', { noteId, toEmail });
 
 export const createCalendarWithContact = (noteId: number, dueAt: string) =>
@@ -232,6 +233,8 @@ export const updateCalendarEvent = (noteId: number, dueAt: string) =>
 // Archive
 export const archiveNote = (id: number) => invoke<void>('archive_note', { id });
 export const unarchiveNote = (id: number) => invoke<void>('unarchive_note', { id });
+export const pinNote = (id: number) => invoke<void>('pin_note', { id });
+export const unpinNote = (id: number) => invoke<void>('unpin_note', { id });
 
 // Reorder
 export const reorderNote = (id: number, sortOrder: number) =>
@@ -298,6 +301,7 @@ export const deleteSavedSearch = (id: number) => invoke<void>('delete_saved_sear
 export interface CategoryCount {
   name: string;
   count: number;
+  color: string;
 }
 export interface NoteStatistics {
   totalNotes: number;

@@ -516,26 +516,44 @@ pub fn open_telephone_rapport(
     db: State<'_, Arc<Database>>,
     app: tauri::AppHandle,
     note_id: i64,
-    to_email: String,
+    to_email: Option<String>,
 ) -> Result<(), String> {
     let note = db.get_note(note_id).map_err(user_error)?;
+    let lang = crate::i18n::ui_language(&app);
+
+    // Resolve recipient: explicit email, or the coworker linked to the note
+    let to_email = match to_email {
+        Some(e) if !e.is_empty() => e,
+        _ => note
+            .coworker
+            .as_ref()
+            .and_then(|c| c.email.clone())
+            .ok_or_else(|| crate::i18n::tr(&lang, "rapport.noRecipient").to_string())?,
+    };
 
     // Build subject — use contact name if available, otherwise note title
-    let subject = if let Some(ref contact) = note.contact {
-        format!(
-            "Telephone rapport — {} {}",
-            contact.first_name, contact.last_name
-        )
-    } else {
-        format!("Telephone rapport — {}", note.title)
-    };
+    let name = note
+        .contact
+        .as_ref()
+        .map(|c| format!("{} {}", c.first_name, c.last_name))
+        .unwrap_or_else(|| note.title.clone());
+    let subject = crate::i18n::tr(&lang, "rapport.subject").replace("{name}", &name);
 
     // Build body — contact info is optional
     let mut body = String::new();
     if let Some(ref contact) = note.contact {
-        body.push_str(&format!("Contact: {} {}", contact.first_name, contact.last_name));
+        body.push_str(&format!(
+            "{}: {} {}",
+            crate::i18n::tr(&lang, "rapport.contact"),
+            contact.first_name,
+            contact.last_name
+        ));
         if let Some(ref company) = contact.company_name {
-            body.push_str(&format!("\nCompany: {}", company));
+            body.push_str(&format!(
+                "\n{}: {}",
+                crate::i18n::tr(&lang, "rapport.company"),
+                company
+            ));
         }
         // Build contact info line: ID, phone, mobile comma-separated
         let mut info_parts: Vec<String> = Vec::new();
@@ -555,9 +573,13 @@ pub fn open_telephone_rapport(
             body.push_str(&format!("\n{}", email));
         }
     } else {
-        body.push_str("No contact linked");
+        body.push_str(crate::i18n::tr(&lang, "rapport.noContact"));
     }
-    body.push_str(&format!("\n\nPlease Recall!\n{}", note.content));
+    body.push_str(&format!(
+        "\n\n{}\n{}",
+        crate::i18n::tr(&lang, "rapport.recall"),
+        note.content
+    ));
 
     // Build mailto URL — opens Outlook (or default mail client) with pre-filled email
     let subject_enc = urlencoding::encode(&subject);
@@ -667,6 +689,18 @@ pub fn archive_note(db: State<'_, Arc<Database>>, id: i64) -> Result<(), String>
 #[tauri::command]
 pub fn unarchive_note(db: State<'_, Arc<Database>>, id: i64) -> Result<(), String> {
     db.unarchive_note(id).map_err(user_error)
+}
+
+// --- Pin commands ---
+
+#[tauri::command]
+pub fn pin_note(db: State<'_, Arc<Database>>, id: i64) -> Result<(), String> {
+    db.pin_note(id).map_err(user_error)
+}
+
+#[tauri::command]
+pub fn unpin_note(db: State<'_, Arc<Database>>, id: i64) -> Result<(), String> {
+    db.unpin_note(id).map_err(user_error)
 }
 
 // --- Note reordering ---

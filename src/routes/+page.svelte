@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { writable } from 'svelte/store';
+  import { writable, get } from 'svelte/store';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
   import NoteEditor from '$lib/components/NoteEditor.svelte';
@@ -11,6 +11,15 @@
   import CoworkerDialog from '$lib/components/CoworkerDialog.svelte';
   import ShortcutHelp from '$lib/components/ShortcutHelp.svelte';
   import QuickCapture from '$lib/components/QuickCapture.svelte';
+  import Toast from '$lib/components/ui/Toast.svelte';
+  import Toggle from '$lib/components/ui/Toggle.svelte';
+  import CommandPalette from '$lib/components/CommandPalette.svelte';
+  import HotkeyInput from '$lib/components/ui/HotkeyInput.svelte';
+  import { showToast } from '$lib/stores/toast';
+  import {
+    PanelLeft, FolderPlus, UserPlus, Users, Zap, Keyboard, Settings, X,
+    Database, FileDown, FileUp, Download, ShieldCheck, LogOut, LogIn, AlertCircle, Filter
+  } from '@lucide/svelte';
   import {
     notes,
     selectedNoteId,
@@ -31,6 +40,7 @@
     searchQuery
   } from '$lib/stores/notes';
   import { settings } from '$lib/stores/settings';
+  import { t, localeLabels, type Locale } from '$lib/i18n';
   import * as api from '$lib/api';
 
   export const showFilterDropdown = writable(false);
@@ -44,6 +54,7 @@
   let showCoworkerDialog = $state(false);
   let showShortcutHelp = $state(false);
   let showQuickCapture = $state(false);
+  let showCommandPalette = $state(false);
   let statistics = $state<api.NoteStatistics | null>(null);
   let contactList = $state<api.Contact[]>([]);
   let coworkerList = $state<api.Coworker[]>([]);
@@ -75,6 +86,7 @@
   // Hotkey settings
   let openHotkey = $state('Ctrl+Shift+M');
   let saveCloseHotkey = $state('Ctrl+Shift+N');
+  let quickCaptureHotkey = $state('Ctrl+Shift+Q');
   let hotkeyError = $state('');
   let hotkeySaved = $state('');
 
@@ -152,6 +164,7 @@
       const config = await api.getHotkeys();
       openHotkey = config.open;
       saveCloseHotkey = config.saveClose;
+      quickCaptureHotkey = config.quickCapture;
     } catch (e) {
       console.error('Failed to load hotkeys:', e);
     }
@@ -228,7 +241,7 @@
   async function saveGraphClientId() {
     try {
       await api.setGraphClientId(graphClientId);
-      graphClientIdSaved = 'Client ID saved';
+      graphClientIdSaved = get(t)('settings.clientIdSaved');
       setTimeout(() => (graphClientIdSaved = ''), 1500);
     } catch (e: any) {
       deviceCodeMsg = e?.message ?? String(e);
@@ -244,22 +257,17 @@
     }
   }
 
-  async function saveOpenHotkey() {
-    hotkeyError = '';
-    try {
-      await api.setOpenHotkey(openHotkey);
-      hotkeySaved = 'Open hotkey saved';
-      setTimeout(() => (hotkeySaved = ''), 1500);
-    } catch (e: any) {
-      hotkeyError = e?.message ?? String(e);
-    }
+  function setLanguage(lang: string) {
+    settings.update((s) => ({ ...s, language: lang as Locale }));
   }
 
-  async function saveSaveCloseHotkey() {
+  async function saveHotkey(which: 'open' | 'saveClose' | 'quickCapture', value: string) {
     hotkeyError = '';
     try {
-      await api.setSaveCloseHotkey(saveCloseHotkey);
-      hotkeySaved = 'Save&close hotkey saved';
+      if (which === 'open') await api.setOpenHotkey(value);
+      else if (which === 'saveClose') await api.setSaveCloseHotkey(value);
+      else await api.setQuickCaptureHotkey(value);
+      hotkeySaved = value ? get(t)('settings.shortcutSaved') : get(t)('settings.shortcutDisabled');
       setTimeout(() => (hotkeySaved = ''), 1500);
     } catch (e: any) {
       hotkeyError = e?.message ?? String(e);
@@ -351,10 +359,14 @@
       e.preventDefault();
       showQuickCapture = true;
     }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      e.preventDefault();
+      showCommandPalette = !showCommandPalette;
+    }
     if (e.key === 'Escape') {
       // Don't hide if a dialog or search dropdown is open
       const isDialogOpen = showSettings || showCategoryDialog || showContactDialog ||
-        showCoworkerDialog || showShortcutHelp || showQuickCapture ||
+        showCoworkerDialog || showShortcutHelp || showQuickCapture || showCommandPalette ||
         $showFilterDropdown;
       if (!isDialogOpen && !$searchQuery) {
         handleHide();
@@ -363,228 +375,328 @@
   }}
 />
 
-<div class="flex flex-col h-screen bg-bg rounded-lg overflow-hidden border border-border shadow-2xl">
+<div class="flex flex-col h-screen bg-bg rounded-lg overflow-hidden border border-border shadow-xl">
   <!-- Title bar / drag region -->
-  <div data-tauri-drag-region class="flex items-center gap-2 px-3 py-1.5 bg-bg-subtle border-b border-border select-none">
-    <img src="/logo.png" alt="MasterNote" class="w-4 h-4 shrink-0" draggable="false" />
-    <span data-tauri-drag-region class="text-xs font-semibold text-fg flex-1">MasterNote</span>
-    <button onclick={() => (showSidebar = !showSidebar)} class="text-fg-muted hover:text-fg text-xs px-1" title="Toggle sidebar">
-      ☰
-    </button>
-    <button onclick={() => (showCategoryDialog = true)} class="text-fg-muted hover:text-fg text-xs px-1" title="Manage categories">
-      📁
-    </button>
-    <button onclick={() => (showContactDialog = true)} class="text-fg-muted hover:text-fg text-xs px-1" title="Manage contacts">
-      👤
-    </button>
-    <button onclick={() => (showCoworkerDialog = true)} class="text-fg-muted hover:text-fg text-xs px-1" title="Manage coworkers">
-      🤝
-    </button>
-    <button onclick={() => (showQuickCapture = true)} class="text-fg-muted hover:text-fg text-xs px-1" title="Quick capture (Ctrl+Shift+Q)">
-      ⚡
-    </button>
-    <button onclick={() => (showShortcutHelp = true)} class="text-fg-muted hover:text-fg text-xs px-1" title="Keyboard shortcuts (Ctrl+Shift+?)">
-      ?
-    </button>
-    <button onclick={() => (showSettings = !showSettings)} class="text-fg-muted hover:text-fg text-xs px-1" title="Settings">
-      ⚙
-    </button>
-    <button onclick={handleHide} class="text-fg-muted hover:text-fg text-xs px-1" title="Hide (Esc)">
-      ✕
-    </button>
+  <div data-tauri-drag-region class="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-accent/5 to-transparent border-b border-border select-none">
+    <img src="/logo.png" alt="MasterNote" class="w-5 h-5 shrink-0 rounded" draggable="false" />
+    <span data-tauri-drag-region class="text-sm font-bold text-fg flex-1 tracking-tight">MasterNote</span>
+
+    <!-- Navigation group -->
+    <div class="flex items-center gap-0.5">
+      <button onclick={() => (showSidebar = !showSidebar)} class="text-fg-muted hover:text-fg hover:bg-accent-soft p-1.5 rounded-lg transition" title={$t('titlebar.sidebar')}>
+        <PanelLeft class="w-3.5 h-3.5" />
+      </button>
+      <button onclick={() => (showQuickCapture = true)} class="text-fg-muted hover:text-fg hover:bg-accent-soft p-1.5 rounded-lg transition" title={$t('titlebar.quickCapture')}>
+        <Zap class="w-3.5 h-3.5" />
+      </button>
+    </div>
+
+    <div class="w-px h-4 bg-border"></div>
+
+    <!-- Manage group -->
+    <div class="flex items-center gap-0.5">
+      <button onclick={() => (showCategoryDialog = true)} class="text-fg-muted hover:text-fg hover:bg-accent-soft p-1.5 rounded-lg transition" title={$t('titlebar.categories')}>
+        <FolderPlus class="w-3.5 h-3.5" />
+      </button>
+      <button onclick={() => (showContactDialog = true)} class="text-fg-muted hover:text-fg hover:bg-accent-soft p-1.5 rounded-lg transition" title={$t('titlebar.contacts')}>
+        <UserPlus class="w-3.5 h-3.5" />
+      </button>
+      <button onclick={() => (showCoworkerDialog = true)} class="text-fg-muted hover:text-fg hover:bg-accent-soft p-1.5 rounded-lg transition" title={$t('titlebar.coworkers')}>
+        <Users class="w-3.5 h-3.5" />
+      </button>
+    </div>
+
+    <div class="w-px h-4 bg-border"></div>
+
+    <!-- System group -->
+    <div class="flex items-center gap-0.5">
+      <button onclick={() => (showShortcutHelp = true)} class="text-fg-muted hover:text-fg hover:bg-accent-soft p-1.5 rounded-lg transition" title={$t('titlebar.shortcuts')}>
+        <Keyboard class="w-3.5 h-3.5" />
+      </button>
+      <button onclick={() => (showSettings = !showSettings)} class="text-fg-muted hover:text-fg hover:bg-accent-soft p-1.5 rounded-lg transition" title={$t('titlebar.settings')}>
+        <Settings class="w-3.5 h-3.5" />
+      </button>
+      <button onclick={handleHide} class="text-fg-muted hover:text-danger hover:bg-danger-soft p-1.5 rounded-lg transition" title={$t('titlebar.hide')}>
+        <X class="w-3.5 h-3.5" />
+      </button>
+    </div>
   </div>
 
   <SearchBar bind:this={searchBar} />
 
   {#if $lastError}
-    <div class="px-3 py-1.5 text-xs text-red-500 bg-red-500/10 border-b border-red-500/20 flex items-center gap-2">
+    <div class="px-3 py-1.5 text-xs text-danger bg-danger-soft border-b border-danger/20 flex items-center gap-2">
+      <AlertCircle class="w-3.5 h-3.5 shrink-0" />
       <span class="flex-1">{$lastError}</span>
-      <button onclick={() => lastError.set(null)} class="text-red-500 hover:text-red-700">✕</button>
+      <button onclick={() => lastError.set(null)} class="text-danger hover:opacity-70"><X class="w-3 h-3" /></button>
     </div>
   {/if}
 
   {#if showSettings}
-    <div class="flex flex-col gap-2 px-3 py-2 border-b border-border bg-bg-subtle text-xs max-h-80 overflow-y-auto">
-      <!-- Theme -->
-      <label class="flex items-center gap-2">
-        <span class="text-fg-muted w-28">Theme</span>
-        <select
-          value={$settings.theme}
-          onchange={(e) => settings.update((s) => ({ ...s, theme: (e.target as HTMLSelectElement).value as any }))}
-          class="bg-bg-muted rounded px-2 py-1 border border-border"
-        >
-          <option value="system">System</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-        </select>
-      </label>
-
-      <!-- Hide on blur -->
-      <label class="flex items-center gap-2">
-        <input
-          type="checkbox"
-          checked={$settings.hideOnBlur}
-          onchange={(e) => settings.update((s) => ({ ...s, hideOnBlur: (e.target as HTMLInputElement).checked }))}
-          class="accent-accent"
-        />
-        <span class="text-fg-muted">Hide widget when clicking outside</span>
-      </label>
-
-      <!-- Autosave interval -->
-      <label class="flex items-center gap-2">
-        <span class="text-fg-muted w-28">Autosave (ms)</span>
-        <input
-          type="number"
-          min="0"
-          max="10000"
-          step="100"
-          value={$settings.autosaveInterval}
-          onchange={(e) => settings.update((s) => ({ ...s, autosaveInterval: parseInt((e.target as HTMLInputElement).value) || 0 }))}
-          class="bg-bg-muted rounded px-2 py-1 border border-border w-20"
-        />
-        <span class="text-[10px] text-fg-muted">0 = instant</span>
-      </label>
-
-      <!-- Divider -->
-      <div class="border-t border-border my-1"></div>
-
-      <!-- Hotkeys -->
-      <div class="text-fg-muted font-medium mb-1">Keyboard Shortcuts</div>
-
-      <div class="flex items-center gap-2">
-        <span class="text-fg-muted w-28">Open / toggle</span>
-        <input
-          bind:value={openHotkey}
-          placeholder="e.g. Ctrl+Shift+M"
-          class="flex-1 bg-bg-muted rounded px-2 py-1 border border-border outline-none font-mono text-[11px]"
-        />
-        <button onclick={saveOpenHotkey} class="px-2 py-1 rounded bg-accent text-accent-fg hover:opacity-90">
-          Apply
-        </button>
+    <div class="flex flex-col gap-3 px-3 py-3 border-b border-border bg-bg-subtle text-xs max-h-96 overflow-y-auto animate-slide-down">
+      <!-- Appearance section -->
+      <div>
+        <div class="flex items-center gap-1.5 text-fg-muted font-semibold mb-1.5">
+          <Settings class="w-3 h-3" />
+          {$t('settings.appearance')}
+        </div>
+        <div class="flex items-center gap-2 mb-1.5">
+          <span class="text-fg-muted w-28">{$t('settings.theme')}</span>
+          <select
+            value={$settings.theme}
+            onchange={(e) => settings.update((s) => ({ ...s, theme: (e.target as HTMLSelectElement).value as any }))}
+            class="bg-bg-muted rounded-lg px-2 py-1.5 border border-border outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+          >
+            <option value="system">{$t('settings.system')}</option>
+            <option value="light">{$t('settings.light')}</option>
+            <option value="dark">{$t('settings.dark')}</option>
+          </select>
+        </div>
+        <div class="flex items-center gap-2 mb-1.5">
+          <span class="text-fg-muted w-28">{$t('settings.language')}</span>
+          <select
+            value={$settings.language}
+            onchange={(e) => setLanguage((e.target as HTMLSelectElement).value)}
+            class="bg-bg-muted rounded-lg px-2 py-1.5 border border-border outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+          >
+            {#each Object.entries(localeLabels) as [code, label]}
+              <option value={code}>{label}</option>
+            {/each}
+          </select>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-fg-muted w-28">{$t('settings.hideOnBlur')}</span>
+          <Toggle checked={$settings.hideOnBlur} onchange={() => settings.update((s) => ({ ...s, hideOnBlur: !s.hideOnBlur }))} label={$t('settings.hideOnBlurHint')} />
+          <span class="text-fg-muted">{$t('settings.hideOnBlurHint')}</span>
+        </div>
       </div>
 
-      <div class="flex items-center gap-2">
-        <span class="text-fg-muted w-28">Save & close</span>
-        <input
-          bind:value={saveCloseHotkey}
-          placeholder="e.g. Ctrl+Shift+N"
-          class="flex-1 bg-bg-muted rounded px-2 py-1 border border-border outline-none font-mono text-[11px]"
-        />
-        <button onclick={saveSaveCloseHotkey} class="px-2 py-1 rounded bg-accent text-accent-fg hover:opacity-90">
-          Apply
-        </button>
+      <div class="border-t border-border"></div>
+
+      <!-- Behavior section -->
+      <div>
+        <div class="flex items-center gap-1.5 text-fg-muted font-semibold mb-1.5">
+          <Zap class="w-3 h-3" />
+          {$t('settings.behavior')}
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-fg-muted w-28">{$t('settings.autosave')}</span>
+          <input
+            type="number"
+            min="0"
+            max="10000"
+            step="100"
+            value={$settings.autosaveInterval}
+            onchange={(e) => settings.update((s) => ({ ...s, autosaveInterval: parseInt((e.target as HTMLInputElement).value) || 0 }))}
+            class="bg-bg-muted rounded-lg px-2 py-1.5 border border-border outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 w-20"
+          />
+          <span class="text-[10px] text-fg-muted">{$t('settings.instant')}</span>
+        </div>
       </div>
 
-      <div class="text-[10px] text-fg-muted pl-28">
-        Format: Ctrl+Shift+Key, Alt+Key, etc. Changes apply immediately.
-      </div>
+      <div class="border-t border-border"></div>
 
-      {#if hotkeyError}
-        <div class="text-[10px] text-red-500 pl-28">{hotkeyError}</div>
-      {/if}
-      {#if hotkeySaved}
-        <div class="text-[10px] text-green-500 pl-28">{hotkeySaved}</div>
-      {/if}
-
-      <!-- Divider -->
-      <div class="border-t border-border my-1"></div>
-
-      <!-- Outlook -->
-      <div class="text-fg-muted font-medium mb-1">Outlook Integration</div>
-      <div class="flex items-center gap-2">
-        <span class="text-fg-muted w-28">Connection</span>
-        {#if $settings.graphSignedIn}
-          <button onclick={signOutGraph} class="px-2 py-1 rounded bg-bg-muted hover:bg-border">Sign out</button>
-          <span class="text-green-500">✓ Connected</span>
-        {:else}
-          <button onclick={signInGraph} class="px-2 py-1 rounded bg-accent text-accent-fg hover:opacity-90">Sign in</button>
+      <!-- Keyboard shortcuts -->
+      <div>
+        <div class="flex items-center gap-1.5 text-fg-muted font-semibold mb-1.5">
+          <Keyboard class="w-3 h-3" />
+          {$t('settings.shortcuts')}
+        </div>
+        <div class="flex items-center gap-2 mb-1.5">
+          <span class="text-fg-muted w-28">{$t('settings.openToggle')}</span>
+          <HotkeyInput bind:value={openHotkey} onApply={(v) => saveHotkey('open', v)} />
+          <button
+            onclick={() => { openHotkey = ''; saveHotkey('open', ''); }}
+            class="px-2 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition text-[10px]"
+            title={$t('settings.disableShortcut')}
+          >{$t('common.none')}</button>
+        </div>
+        <div class="flex items-center gap-2 mb-1.5">
+          <span class="text-fg-muted w-28">{$t('settings.saveClose')}</span>
+          <HotkeyInput bind:value={saveCloseHotkey} onApply={(v) => saveHotkey('saveClose', v)} />
+          <button
+            onclick={() => { saveCloseHotkey = ''; saveHotkey('saveClose', ''); }}
+            class="px-2 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition text-[10px]"
+            title={$t('settings.disableShortcut')}
+          >{$t('common.none')}</button>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-fg-muted w-28">{$t('settings.quickCapture')}</span>
+          <HotkeyInput bind:value={quickCaptureHotkey} onApply={(v) => saveHotkey('quickCapture', v)} />
+          <button
+            onclick={() => { quickCaptureHotkey = ''; saveHotkey('quickCapture', ''); }}
+            class="px-2 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition text-[10px]"
+            title={$t('settings.disableShortcut')}
+          >{$t('common.none')}</button>
+        </div>
+        <div class="text-[10px] text-fg-muted mt-1">
+          {$t('settings.shortcutHint')}
+        </div>
+        {#if hotkeyError}
+          <div class="text-[10px] text-danger mt-1">{hotkeyError}</div>
+        {/if}
+        {#if hotkeySaved}
+          <div class="text-[10px] text-success mt-1">{hotkeySaved}</div>
         {/if}
       </div>
-      <div class="flex items-center gap-2">
-        <span class="text-fg-muted w-28">Client ID</span>
-        <input
-          bind:value={graphClientId}
-          placeholder="Azure app client ID"
-          class="flex-1 text-xs bg-bg-muted rounded px-2 py-1 border border-border outline-none"
-        />
-        <button onclick={saveGraphClientId} class="text-xs px-2 py-1 rounded bg-bg-muted hover:bg-border">Save</button>
-      </div>
-      {#if graphClientIdSaved}
-        <div class="text-[10px] text-green-500 pl-28">{graphClientIdSaved}</div>
-      {/if}
-      {#if deviceCodeMsg}
-        <div class="text-[10px] text-blue-500 pl-28 whitespace-pre-wrap">{deviceCodeMsg}</div>
-      {/if}
 
-      <!-- Divider -->
-      <div class="border-t border-border my-1"></div>
+      <div class="border-t border-border"></div>
+
+      <!-- Outlook integration -->
+      <div>
+        <div class="flex items-center gap-1.5 text-fg-muted font-semibold mb-1.5">
+          <ShieldCheck class="w-3 h-3" />
+          {$t('settings.outlook')}
+        </div>
+        <div class="flex items-center gap-2 mb-1.5">
+          <span class="text-fg-muted w-28">{$t('settings.connection')}</span>
+          {#if $settings.graphSignedIn}
+            <button onclick={signOutGraph} class="px-2.5 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition inline-flex items-center gap-1">
+              <LogOut class="w-3 h-3" />
+              {$t('settings.signOut')}
+            </button>
+            <span class="text-success inline-flex items-center gap-1">
+              <ShieldCheck class="w-3 h-3" />
+              {$t('settings.connected')}
+            </span>
+          {:else}
+            <button onclick={signInGraph} class="px-2.5 py-1.5 rounded-lg bg-accent text-accent-fg font-medium hover:bg-accent-dark transition inline-flex items-center gap-1">
+              <LogIn class="w-3 h-3" />
+              {$t('settings.signIn')}
+            </button>
+          {/if}
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-fg-muted w-28">{$t('settings.clientId')}</span>
+          <input
+            bind:value={graphClientId}
+            placeholder={$t('settings.clientIdPlaceholder')}
+            class="flex-1 bg-bg-muted rounded-lg px-2 py-1.5 border border-border outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+          />
+          <button onclick={saveGraphClientId} class="px-2.5 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition">{$t('common.save')}</button>
+        </div>
+        {#if graphClientIdSaved}
+          <div class="text-[10px] text-success mt-1">{graphClientIdSaved}</div>
+        {/if}
+        {#if deviceCodeMsg}
+          <div class="text-[10px] text-info mt-1 whitespace-pre-wrap">{deviceCodeMsg}</div>
+        {/if}
+      </div>
+
+      <div class="border-t border-border"></div>
 
       <!-- Data management -->
-      <div class="text-fg-muted font-medium mb-1">Data Management</div>
-      <div class="flex items-center gap-2 flex-wrap">
-        <button onclick={handleBackupDatabase} class="px-2 py-1 rounded bg-bg-muted hover:bg-border">Backup DB</button>
-        <button onclick={handleRestoreDatabase} class="px-2 py-1 rounded bg-bg-muted hover:bg-border">Restore DB</button>
-        <button onclick={handleExportNotes} class="px-2 py-1 rounded bg-bg-muted hover:bg-border">Export Notes</button>
-        <button onclick={handleExportVcard} class="px-2 py-1 rounded bg-bg-muted hover:bg-border">Export vCard</button>
+      <div>
+        <div class="flex items-center gap-1.5 text-fg-muted font-semibold mb-1.5">
+          <Database class="w-3 h-3" />
+          {$t('settings.data')}
+        </div>
+        <div class="flex items-center gap-1.5 flex-wrap">
+          <button onclick={handleBackupDatabase} class="px-2.5 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition inline-flex items-center gap-1">
+            <FileDown class="w-3 h-3" />
+            {$t('settings.backup')}
+          </button>
+          <button onclick={handleRestoreDatabase} class="px-2.5 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition inline-flex items-center gap-1">
+            <FileUp class="w-3 h-3" />
+            {$t('settings.restore')}
+          </button>
+          <button onclick={handleExportNotes} class="px-2.5 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition inline-flex items-center gap-1">
+            <Download class="w-3 h-3" />
+            {$t('settings.exportNotes')}
+          </button>
+          <button onclick={handleExportVcard} class="px-2.5 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition inline-flex items-center gap-1">
+            <Download class="w-3 h-3" />
+            {$t('settings.exportVcard')}
+          </button>
+        </div>
       </div>
-
-      <!-- Divider -->
-      <div class="border-t border-border my-1"></div>
 
       <!-- Statistics -->
       {#if statistics}
-        <div class="text-fg-muted font-medium mb-1">Statistics</div>
-        <div class="grid grid-cols-2 gap-1 text-[10px]">
-          <div>Total notes: <span class="text-fg">{statistics.totalNotes}</span></div>
-          <div>Archived: <span class="text-fg">{statistics.archivedNotes}</span></div>
-          <div>With reminders: <span class="text-fg">{statistics.notesWithReminders}</span></div>
-          <div>This week: <span class="text-fg">{statistics.notesThisWeek}</span></div>
-          <div>Contacts: <span class="text-fg">{statistics.totalContacts}</span></div>
-          <div>Coworkers: <span class="text-fg">{statistics.totalCoworkers}</span></div>
-        </div>
-        {#if statistics.notesPerCategory.length > 0}
-          <div class="mt-1">
-            {#each statistics.notesPerCategory as cat}
-              <div class="text-[10px] text-fg-muted">{cat.name}: {cat.count}</div>
-            {/each}
+        <div class="border-t border-border"></div>
+        <div>
+          <div class="flex items-center gap-1.5 text-fg-muted font-semibold mb-1.5">
+            <Database class="w-3 h-3" />
+            {$t('settings.statistics')}
           </div>
-        {/if}
+          <div class="grid grid-cols-3 gap-1.5">
+            <div class="bg-bg-muted rounded-lg px-2 py-1.5 text-center">
+              <div class="text-sm font-bold text-fg">{statistics.totalNotes}</div>
+              <div class="text-[9px] text-fg-muted">{$t('settings.totalNotes')}</div>
+            </div>
+            <div class="bg-bg-muted rounded-lg px-2 py-1.5 text-center">
+              <div class="text-sm font-bold text-fg">{statistics.archivedNotes}</div>
+              <div class="text-[9px] text-fg-muted">{$t('settings.archived')}</div>
+            </div>
+            <div class="bg-bg-muted rounded-lg px-2 py-1.5 text-center">
+              <div class="text-sm font-bold text-fg">{statistics.notesWithReminders}</div>
+              <div class="text-[9px] text-fg-muted">{$t('settings.withReminders')}</div>
+            </div>
+            <div class="bg-bg-muted rounded-lg px-2 py-1.5 text-center">
+              <div class="text-sm font-bold text-fg">{statistics.notesThisWeek}</div>
+              <div class="text-[9px] text-fg-muted">{$t('settings.thisWeek')}</div>
+            </div>
+            <div class="bg-bg-muted rounded-lg px-2 py-1.5 text-center">
+              <div class="text-sm font-bold text-fg">{statistics.totalContacts}</div>
+              <div class="text-[9px] text-fg-muted">{$t('settings.contacts')}</div>
+            </div>
+            <div class="bg-bg-muted rounded-lg px-2 py-1.5 text-center">
+              <div class="text-sm font-bold text-fg">{statistics.totalCoworkers}</div>
+              <div class="text-[9px] text-fg-muted">{$t('settings.coworkers')}</div>
+            </div>
+          </div>
+          {#if statistics.notesPerCategory.length > 0}
+            <div class="mt-2 space-y-1">
+              {#each statistics.notesPerCategory as cat}
+                <div class="flex items-center gap-1.5">
+                  <span class="w-2 h-2 rounded-full shrink-0" style="background: {cat.color}"></span>
+                  <span class="text-[10px] text-fg-muted flex-1">{cat.name}</span>
+                  <div class="flex-1 h-1.5 bg-bg-muted rounded-full overflow-hidden">
+                    <div class="h-full rounded-full" style="width: {Math.min(100, (cat.count / Math.max(1, statistics.totalNotes)) * 100)}%; background: {cat.color}"></div>
+                  </div>
+                  <span class="text-[10px] text-fg font-medium w-6 text-right">{cat.count}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
       {/if}
     </div>
   {/if}
 
   <!-- Filter button + dropdown -->
-  <div class="relative px-3 py-1 border-b border-border bg-bg-subtle">
+  <div class="relative px-3 py-1.5 border-b border-border bg-bg-subtle">
     <button
       onclick={() => showFilterDropdown.update((v) => !v)}
-      class="text-[10px] px-2 py-0.5 rounded-full bg-bg-muted hover:bg-border transition flex items-center gap-1"
+      class="text-[10px] px-2 py-1 rounded-lg bg-bg-muted hover:bg-border transition flex items-center gap-1 font-medium"
     >
-      🔍 Filter
+      <Filter class="w-3 h-3" />
+      {$t('filter.filters')}
       {#if hasFilters}
-        <span class="text-accent">●</span>
+        <span class="text-accent text-[8px]">●</span>
       {/if}
     </button>
     {#if hasFilters}
-      <button onclick={clearFilters} class="text-[10px] px-1.5 text-fg-muted hover:text-fg ml-1">clear</button>
+      <button onclick={clearFilters} class="text-[10px] px-1.5 text-fg-muted hover:text-fg ml-1">{$t('common.clear')}</button>
     {/if}
 
-    <label class="text-[10px] text-fg-muted ml-2 inline-flex items-center gap-1">
-      <input type="checkbox" checked={$showArchived} onchange={(e) => showArchived.set((e.target as HTMLInputElement).checked)} class="accent-accent" />
-      Show archived
+    <label class="text-[10px] text-fg-muted ml-2 inline-flex items-center gap-1 cursor-pointer">
+      <input type="checkbox" checked={$showArchived} onchange={(e) => showArchived.set((e.target as HTMLInputElement).checked)} class="accent-accent w-3 h-3" />
+      {$t('filter.showArchived')}
     </label>
 
     {#if $showFilterDropdown}
-      <div class="absolute top-full left-3 mt-1 bg-bg rounded-lg border border-border shadow-lg p-3 z-50 w-72 max-h-72 overflow-y-auto">
+      <div class="absolute top-full left-3 mt-1 bg-surface-1 rounded-xl border border-border shadow-lg p-3 z-50 w-72 max-h-72 overflow-y-auto animate-slide-down">
         <!-- Time range -->
         <div class="mb-2">
-          <div class="text-[10px] text-fg-muted mb-1 font-medium">Sort by time</div>
+          <div class="text-[10px] text-fg-muted mb-1 font-medium">{$t('filter.sortTime')}</div>
           <div class="flex gap-1 flex-wrap">
             {#each ['newest', 'oldest', 'today', 'week'] as option}
               <button
                 onclick={() => timeRangeSort.set(option as any)}
                 class="text-[10px] px-2 py-0.5 rounded-full {$timeRangeSort === option ? 'bg-accent text-accent-fg' : 'bg-bg-muted hover:bg-border'}"
               >
-                {option === 'newest' ? 'Newest' : option === 'oldest' ? 'Oldest' : option === 'today' ? 'Today' : 'This week'}
+                {$t('filter.' + option)}
               </button>
             {/each}
           </div>
@@ -592,7 +704,7 @@
 
         {#if $categories.length > 0}
           <div class="mb-2">
-            <div class="text-[10px] text-fg-muted mb-1 font-medium">Categories</div>
+            <div class="text-[10px] text-fg-muted mb-1 font-medium">{$t('filter.categories')}</div>
             <div class="flex gap-1 flex-wrap">
               {#each $categories as cat}
                 <button
@@ -609,7 +721,7 @@
 
         {#if $tags.length > 0}
           <div class="mb-2">
-            <div class="text-[10px] text-fg-muted mb-1 font-medium">Tags</div>
+            <div class="text-[10px] text-fg-muted mb-1 font-medium">{$t('filter.tags')}</div>
             <div class="flex gap-1 flex-wrap">
               {#each $tags as tag}
                 <button
@@ -625,11 +737,11 @@
 
         {#if contactList.length > 0}
           <div class="mb-2">
-            <div class="text-[10px] text-fg-muted mb-1 font-medium">Customers ({contactList.length})</div>
+            <div class="text-[10px] text-fg-muted mb-1 font-medium">{$t('filter.customers')} ({contactList.length})</div>
             {#if contactList.length > 8}
               <input
                 bind:value={contactFilterQuery}
-                placeholder="Search customers…"
+                placeholder={$t('filter.searchCustomers')}
                 class="w-full text-[10px] bg-bg-muted rounded px-1.5 py-1 border border-border outline-none mb-1"
               />
             {/if}
@@ -643,7 +755,7 @@
                 </button>
               {/each}
               {#if filteredContactList.length === 0}
-                <span class="text-[10px] text-fg-muted">No matches</span>
+                <span class="text-[10px] text-fg-muted">{$t('common.noMatches')}</span>
               {/if}
             </div>
           </div>
@@ -651,11 +763,11 @@
 
         {#if coworkerList.length > 0}
           <div class="mb-2">
-            <div class="text-[10px] text-fg-muted mb-1 font-medium">Coworkers ({coworkerList.length})</div>
+            <div class="text-[10px] text-fg-muted mb-1 font-medium">{$t('filter.coworkers')} ({coworkerList.length})</div>
             {#if coworkerList.length > 8}
               <input
                 bind:value={coworkerFilterQuery}
-                placeholder="Search coworkers…"
+                placeholder={$t('filter.searchCoworkers')}
                 class="w-full text-[10px] bg-bg-muted rounded px-1.5 py-1 border border-border outline-none mb-1"
               />
             {/if}
@@ -669,14 +781,14 @@
                 </button>
               {/each}
               {#if filteredCoworkerList.length === 0}
-                <span class="text-[10px] text-fg-muted">No matches</span>
+                <span class="text-[10px] text-fg-muted">{$t('common.noMatches')}</span>
               {/if}
             </div>
           </div>
         {/if}
 
         <div class="mb-2">
-          <div class="text-[10px] text-fg-muted mb-1 font-medium">Date range</div>
+          <div class="text-[10px] text-fg-muted mb-1 font-medium">{$t('filter.dateRange')}</div>
           <div class="flex items-center gap-1">
             <input
               type="date"
@@ -684,7 +796,7 @@
               onchange={(e) => dateFrom.set((e.target as HTMLInputElement).value || null)}
               class="text-[10px] bg-bg-muted rounded px-1.5 py-1 border border-border outline-none flex-1"
             />
-            <span class="text-fg-muted text-[10px]">to</span>
+            <span class="text-fg-muted text-[10px]">{$t('filter.to')}</span>
             <input
               type="date"
               value={$dateTo ?? ''}
@@ -696,7 +808,7 @@
             <button
               onclick={() => { dateFrom.set(null); dateTo.set(null); }}
               class="text-[10px] text-fg-muted hover:text-fg mt-1"
-            >clear dates</button>
+            >{$t('filter.clearDates')}</button>
           {/if}
         </div>
       </div>
@@ -736,3 +848,20 @@
 {#if showQuickCapture}
   <QuickCapture onClose={() => (showQuickCapture = false)} onSaved={() => { loadNotes(); loadStatistics(); }} />
 {/if}
+
+{#if showCommandPalette}
+  <CommandPalette
+    onClose={() => (showCommandPalette = false)}
+    onNewNote={() => { showCommandPalette = false; newNoteAndFocus(); }}
+    onToggleSidebar={() => { showCommandPalette = false; showSidebar = !showSidebar; }}
+    onOpenSettings={() => { showCommandPalette = false; showSettings = true; }}
+    onOpenCategories={() => { showCommandPalette = false; showCategoryDialog = true; }}
+    onOpenContacts={() => { showCommandPalette = false; showContactDialog = true; }}
+    onOpenCoworkers={() => { showCommandPalette = false; showCoworkerDialog = true; }}
+    onQuickCapture={() => { showCommandPalette = false; showQuickCapture = true; }}
+    onShowShortcuts={() => { showCommandPalette = false; showShortcutHelp = true; }}
+    onToggleTheme={() => { showCommandPalette = false; settings.update((s) => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' })); }}
+  />
+{/if}
+
+<Toast />

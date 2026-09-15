@@ -1,64 +1,51 @@
 <script lang="ts">
+  import Modal from '$lib/components/ui/Modal.svelte';
+  import { Keyboard } from '@lucide/svelte';
+  import { t } from '$lib/i18n';
+
   let { onClose } = $props<{ onClose: () => void }>();
 
   const shortcuts = [
-    { group: 'Global', items: [
-      { key: 'Ctrl+Shift+M', desc: 'Toggle widget visibility' },
-      { key: 'Ctrl+Shift+N', desc: 'Save and close widget' },
-      { key: 'Ctrl+Shift+Q', desc: 'Quick capture' },
-      { key: 'Esc', desc: 'Hide widget' },
+    { group: 'shortcuts.global', items: [
+      { key: 'Ctrl+Shift+M', desc: 'shortcuts.toggleWidget' },
+      { key: 'Ctrl+Shift+N', desc: 'shortcuts.saveClose' },
+      { key: 'Ctrl+Shift+Q', desc: 'shortcuts.quickCapture' },
+      { key: 'Esc', desc: 'shortcuts.hide' },
     ]},
-    { group: 'Notes', items: [
-      { key: 'Ctrl+N', desc: 'New note' },
-      { key: 'Ctrl+S / Ctrl+Enter', desc: 'Save note' },
-      { key: 'Ctrl+Shift+Tab', desc: 'Select next note' },
-      { key: 'Ctrl+F', desc: 'Focus search' },
+    { group: 'shortcuts.notes', items: [
+      { key: 'Ctrl+N', desc: 'shortcuts.newNote' },
+      { key: 'Ctrl+S / Ctrl+Enter', desc: 'shortcuts.saveNote' },
+      { key: 'Ctrl+Shift+Tab', desc: 'shortcuts.nextNote' },
+      { key: 'Ctrl+F', desc: 'shortcuts.focusSearch' },
+      { key: 'Ctrl+K', desc: 'shortcuts.commandPalette' },
     ]},
-    { group: 'Editor', items: [
-      { key: 'Ctrl+Shift+T', desc: 'Focus title' },
-      { key: 'Ctrl+Shift+D', desc: 'Focus description' },
-      { key: 'Ctrl+Shift+C', desc: 'Focus category picker' },
-      { key: 'Ctrl+Shift+K', desc: 'Focus contact picker' },
-      { key: 'Ctrl+Shift+H', desc: 'Focus coworker picker' },
+    { group: 'shortcuts.editor', items: [
+      { key: 'Ctrl+Shift+T', desc: 'shortcuts.focusTitle' },
+      { key: 'Ctrl+Shift+D', desc: 'shortcuts.focusDesc' },
+      { key: 'Ctrl+Shift+C', desc: 'shortcuts.focusCategory' },
+      { key: 'Ctrl+Shift+K', desc: 'shortcuts.focusContact' },
+      { key: 'Ctrl+Shift+H', desc: 'shortcuts.focusCoworker' },
     ]},
-    { group: 'UI', items: [
-      { key: 'Ctrl+Shift+?', desc: 'Show this help' },
+    { group: 'shortcuts.ui', items: [
+      { key: 'Ctrl+Shift+?', desc: 'shortcuts.showHelp' },
     ]},
   ];
 </script>
 
-<svelte:window on:keydown={(e) => { if (e.key === 'Escape') onClose(); }} />
+<Modal onClose={onClose} width="w-96" title={$t('shortcuts.title')}>
+  {#snippet icon()}<Keyboard class="w-4 h-4" />{/snippet}
 
-<div
-  class="fixed inset-0 bg-black/30 flex items-center justify-center z-50"
-  role="button"
-  tabindex="-1"
-  onclick={onClose}
-  onkeydown={(e) => { if (e.key === 'Escape') onClose(); }}
->
-  <div
-    class="bg-bg rounded-lg shadow-xl border border-border p-4 w-96 max-h-[80vh] overflow-y-auto"
-    role="dialog"
-    aria-modal="true"
-    tabindex="-1"
-    onclick={(e) => e.stopPropagation()}
-    onkeydown={(e) => e.stopPropagation()}
-  >
-    <div class="flex items-center justify-between mb-3">
-      <h3 class="text-sm font-semibold">Keyboard Shortcuts</h3>
-      <button onclick={onClose} class="text-fg-muted hover:text-fg text-xs">✕</button>
-    </div>
-
+  <div class="p-4 space-y-3">
     {#each shortcuts as group}
-      <div class="mb-3">
-        <div class="text-[10px] text-fg-muted font-medium uppercase mb-1">{group.group}</div>
+      <div>
+        <div class="text-[10px] text-fg-muted font-semibold uppercase tracking-wider mb-1.5">{$t(group.group)}</div>
         {#each group.items as item}
-          <div class="flex items-center justify-between py-0.5 text-xs">
-            <span class="text-fg-muted">{item.desc}</span>
-            <kbd class="font-mono text-[10px] bg-bg-muted px-1.5 py-0.5 rounded border border-border">{item.key}</kbd>
+          <div class="flex items-center justify-between py-1 text-xs">
+            <span class="text-fg-muted">{$t(item.desc)}</span>
+            <kbd class="font-mono text-[10px] bg-bg-muted px-1.5 py-0.5 rounded-md border border-border shadow-sm">{item.key}</kbd>
           </div>
         {/each}
       </div>
     {/each}
   </div>
-</div>
+</Modal>

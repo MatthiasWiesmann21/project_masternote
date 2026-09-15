@@ -2,6 +2,10 @@
   import * as api from '$lib/api';
   import { settings } from '$lib/stores/settings';
   import { loadNotes } from '$lib/stores/notes';
+  import Modal from '$lib/components/ui/Modal.svelte';
+  import { Bell } from '@lucide/svelte';
+  import { t } from '$lib/i18n';
+  import { get } from 'svelte/store';
 
   let { noteId, onClose } = $props<{ noteId: number; onClose: () => void }>();
 
@@ -36,7 +40,7 @@
       await loadNotes();
       onClose();
     } catch (e: any) {
-      error = e?.message ?? 'Failed to set reminder';
+      error = e?.message ?? get(t)('reminder.setFailed');
     } finally {
       saving = false;
     }
@@ -48,51 +52,37 @@
       await loadNotes();
       onClose();
     } catch (e: any) {
-      error = e?.message ?? 'Failed to delete reminder';
+      error = e?.message ?? get(t)('reminder.deleteFailed');
     }
   }
 </script>
 
-<svelte:window on:keydown={(e) => { if (e.key === 'Escape') onClose(); }} />
+<Modal onClose={onClose} width="w-80" title={$t('reminder.title')}>
+  {#snippet icon()}<Bell class="w-4 h-4" />{/snippet}
 
-<div
-  class="fixed inset-0 bg-black/30 flex items-center justify-center z-50"
-  role="button"
-  tabindex="-1"
-  onclick={onClose}
-  onkeydown={(e) => { if (e.key === 'Escape') onClose(); }}
->
-  <div
-    class="bg-bg rounded-lg shadow-xl border border-border p-4 w-80"
-    role="dialog"
-    aria-modal="true"
-    tabindex="-1"
-    onclick={(e) => e.stopPropagation()}
-    onkeydown={(e) => e.stopPropagation()}
-  >
-    <h3 class="text-sm font-semibold mb-3">Set Reminder</h3>
+  <div class="p-4 space-y-3">
+    <label class="block">
+      <span class="text-xs text-fg-muted mb-1 block font-medium">{$t('reminder.when')}</span>
+      <input
+        type="datetime-local"
+        bind:value={dueAt}
+        class="w-full text-sm bg-bg-muted rounded-lg px-2.5 py-1.5 border border-border outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+      />
+    </label>
 
-    <label class="block text-xs text-fg-muted mb-1" for="reminder-due-at">When</label>
-    <input
-      id="reminder-due-at"
-      type="datetime-local"
-      bind:value={dueAt}
-      class="w-full text-sm bg-bg-muted rounded px-2 py-1.5 border border-border outline-none mb-3"
-    />
-
-    <div class="mb-3">
-      <span class="block text-xs text-fg-muted mb-1">Repeat</span>
+    <div>
+      <span class="text-xs text-fg-muted mb-1 block font-medium">{$t('reminder.repeat')}</span>
       <div class="flex items-center gap-2">
         <select
           bind:value={recurUnit}
-          class="flex-1 text-xs bg-bg-muted rounded px-2 py-1.5 border border-border outline-none"
+          class="flex-1 text-xs bg-bg-muted rounded-lg px-2 py-1.5 border border-border outline-none focus:border-accent"
         >
-          <option value={null}>No repeat</option>
-          <option value="minutes">Minutes</option>
-          <option value="hours">Hours</option>
-          <option value="days">Days</option>
-          <option value="weeks">Weeks</option>
-          <option value="months">Months</option>
+          <option value={null}>{$t('reminder.noRepeat')}</option>
+          <option value="minutes">{$t('reminder.minutes')}</option>
+          <option value="hours">{$t('reminder.hours')}</option>
+          <option value="days">{$t('reminder.days')}</option>
+          <option value="weeks">{$t('reminder.weeks')}</option>
+          <option value="months">{$t('reminder.months')}</option>
         </select>
         {#if recurUnit}
           <input
@@ -100,38 +90,34 @@
             min="1"
             max="999"
             bind:value={recurInterval}
-            placeholder="every"
-            class="w-16 text-xs bg-bg-muted rounded px-2 py-1.5 border border-border outline-none"
+            placeholder={$t('reminder.every')}
+            class="w-16 text-xs bg-bg-muted rounded-lg px-2 py-1.5 border border-border outline-none focus:border-accent"
           />
         {/if}
       </div>
     </div>
 
     {#if $settings.graphSignedIn}
-      <label class="flex items-center gap-2 text-xs mb-3 cursor-pointer">
-        <input type="checkbox" bind:checked={createCalendarEvent} class="accent-accent" />
-        Create Outlook calendar event
+      <label class="flex items-center gap-2 text-xs cursor-pointer">
+        <input type="checkbox" bind:checked={createCalendarEvent} class="accent-accent w-3.5 h-3.5" />
+        {$t('reminder.calendarEvent')}
       </label>
     {/if}
 
     {#if error}
-      <p class="text-xs text-red-500 mb-2">{error}</p>
+      <p class="text-xs text-danger">{error}</p>
     {/if}
-
-    <div class="flex gap-2 justify-end">
-      <button onclick={handleDelete} class="text-xs px-3 py-1.5 rounded text-red-500 hover:bg-red-500/10">
-        Remove
-      </button>
-      <button onclick={onClose} class="text-xs px-3 py-1.5 rounded bg-bg-muted hover:bg-border">
-        Cancel
-      </button>
-      <button
-        onclick={handleSet}
-        disabled={saving}
-        class="text-xs px-3 py-1.5 rounded bg-accent text-accent-fg font-medium hover:opacity-90 disabled:opacity-50"
-      >
-        {saving ? 'Saving…' : 'Set'}
-      </button>
-    </div>
   </div>
-</div>
+
+  {#snippet footer()}
+    <button onclick={handleDelete} class="text-xs px-3 py-1.5 rounded-lg text-danger hover:bg-danger-soft transition mr-auto">{$t('reminder.remove')}</button>
+    <button onclick={onClose} class="text-xs px-3 py-1.5 rounded-lg bg-bg-muted hover:bg-border transition">{$t('common.cancel')}</button>
+    <button
+      onclick={handleSet}
+      disabled={saving}
+      class="text-xs px-3 py-1.5 rounded-lg bg-accent text-accent-fg font-medium hover:bg-accent-dark transition disabled:opacity-50"
+    >
+      {saving ? $t('reminder.saving') : $t('reminder.set')}
+    </button>
+  {/snippet}
+</Modal>

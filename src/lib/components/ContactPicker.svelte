@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import * as api from '$lib/api';
   import type { Contact } from '$lib/api';
+  import { t } from '$lib/i18n';
 
   let { selectedId, onSelect }: { selectedId: number | null; onSelect: (id: number | null) => void } = $props();
 
@@ -133,7 +134,7 @@
       onfocus={() => (showDropdown = true)}
       onblur={() => setTimeout(() => (showDropdown = false), 150)}
       onkeydown={handleKeydown}
-      placeholder="Search contact… (Ctrl+Shift+K)"
+      placeholder={$t('picker.contact')}
       class="text-xs bg-bg-muted rounded px-2 py-1 border border-border outline-none w-full"
     />
     {#if showDropdown && results.length > 0}

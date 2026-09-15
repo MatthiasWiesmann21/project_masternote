@@ -1,6 +1,7 @@
 <script lang="ts">
   import { categories } from '$lib/stores/notes';
   import type { Category } from '$lib/api';
+  import { t } from '$lib/i18n';
 
   let { selectedId, onSelect }: { selectedId: number | null; onSelect: (id: number | null) => void } = $props();
 
@@ -107,7 +108,7 @@
       onfocus={() => (showDropdown = true)}
       onblur={() => setTimeout(() => (showDropdown = false), 150)}
       onkeydown={handleKeydown}
-      placeholder="Category… (Ctrl+Shift+C)"
+      placeholder={$t('picker.category')}
       class="text-xs bg-bg-muted rounded px-2 py-1 border border-border outline-none w-32"
     />
     {#if showDropdown && filtered.length > 0}

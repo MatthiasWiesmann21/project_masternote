@@ -19,6 +19,7 @@ pub struct Note {
     pub contact: Option<Contact>,
     pub coworker: Option<Coworker>,
     pub archived: bool,
+    pub pinned: bool,
     pub sort_order: i64,
     pub links: Vec<NoteLink>,
     pub backlinks: Vec<NoteLink>,
@@ -136,4 +137,5 @@ pub struct NoteStatistics {
 pub struct CategoryCount {
     pub name: String,
     pub count: i64,
+    pub color: String,
 }

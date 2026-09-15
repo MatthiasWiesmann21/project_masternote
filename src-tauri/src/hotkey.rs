@@ -54,9 +54,15 @@ impl HotkeyManager {
         let save_close_hk = self.get_save_close_hotkey();
         let quick_capture_hk = self.get_quick_capture_hotkey();
 
-        self.register_open(&open_hk)?;
-        self.register_save_close(&save_close_hk)?;
-        self.register_quick_capture(&quick_capture_hk)?;
+        if !open_hk.is_empty() {
+            self.register_open(&open_hk)?;
+        }
+        if !save_close_hk.is_empty() {
+            self.register_save_close(&save_close_hk)?;
+        }
+        if !quick_capture_hk.is_empty() {
+            self.register_quick_capture(&quick_capture_hk)?;
+        }
         Ok(())
     }
 
@@ -97,52 +103,46 @@ impl HotkeyManager {
             .map_err(|e| format!("Failed to register quick-capture hotkey '{}': {}", hotkey, e))
     }
 
-    pub fn set_open_hotkey(&self, new_hotkey: &str) -> Result<(), String> {
-        let old = self.get_open_hotkey();
-        // Unregister old
-        let _ = self.app.global_shortcut().unregister(old.as_str());
-        // Register new
-        self.register_open(new_hotkey)?;
-        // Persist
+    fn update_hotkey(
+        &self,
+        store_key: &str,
+        old_hotkey: &str,
+        new_hotkey: &str,
+        register: impl Fn(&Self, &str) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if !old_hotkey.is_empty() {
+            let _ = self.app.global_shortcut().unregister(old_hotkey);
+        }
+        if !new_hotkey.is_empty() {
+            register(self, new_hotkey)?;
+        }
         let store = self.store();
         store.set(
-            KEY_OPEN_HOTKEY,
+            store_key,
             serde_json::Value::String(new_hotkey.to_string()),
         );
         store.save().ok();
         Ok(())
+    }
+
+    pub fn set_open_hotkey(&self, new_hotkey: &str) -> Result<(), String> {
+        let old = self.get_open_hotkey();
+        self.update_hotkey(KEY_OPEN_HOTKEY, &old, new_hotkey, Self::register_open)
     }
 
     pub fn set_save_close_hotkey(&self, new_hotkey: &str) -> Result<(), String> {
         let old = self.get_save_close_hotkey();
-        // Unregister old
-        let _ = self.app.global_shortcut().unregister(old.as_str());
-        // Register new
-        self.register_save_close(new_hotkey)?;
-        // Persist
-        let store = self.store();
-        store.set(
-            KEY_SAVE_CLOSE_HOTKEY,
-            serde_json::Value::String(new_hotkey.to_string()),
-        );
-        store.save().ok();
-        Ok(())
+        self.update_hotkey(KEY_SAVE_CLOSE_HOTKEY, &old, new_hotkey, Self::register_save_close)
     }
 
     pub fn set_quick_capture_hotkey(&self, new_hotkey: &str) -> Result<(), String> {
         let old = self.get_quick_capture_hotkey();
-        // Unregister old
-        let _ = self.app.global_shortcut().unregister(old.as_str());
-        // Register new
-        self.register_quick_capture(new_hotkey)?;
-        // Persist
-        let store = self.store();
-        store.set(
+        self.update_hotkey(
             KEY_QUICK_CAPTURE_HOTKEY,
-            serde_json::Value::String(new_hotkey.to_string()),
-        );
-        store.save().ok();
-        Ok(())
+            &old,
+            new_hotkey,
+            Self::register_quick_capture,
+        )
     }
 }
 

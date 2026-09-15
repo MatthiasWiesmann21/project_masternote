@@ -39,13 +39,14 @@ fn check_and_fire_reminders(app: &AppHandle, db: &Database) {
                 );
 
                 // Fire system notification
+                let lang = crate::i18n::ui_language(app);
                 let title = if note.title.is_empty() {
-                    "MasterNote reminder"
+                    crate::i18n::tr(&lang, "notif.title")
                 } else {
                     &note.title
                 };
                 let body = if note.content.is_empty() {
-                    "You have a note due.".to_string()
+                    crate::i18n::tr(&lang, "notif.due").to_string()
                 } else {
                     note.content.chars().take(120).collect()
                 };

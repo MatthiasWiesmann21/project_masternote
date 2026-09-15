@@ -2,6 +2,8 @@
   import { searchQuery, notes, loadNotes } from '$lib/stores/notes';
   import * as api from '$lib/api';
   import type { SearchResult } from '$lib/api';
+  import { Search, X, Loader2 } from '@lucide/svelte';
+  import { t } from '$lib/i18n';
 
   let results = $state<SearchResult[]>([]);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -108,38 +110,43 @@
 
 <div class="relative">
   <div class="flex items-center gap-2 px-3 py-2 border-b border-border bg-bg-subtle">
-    <svg class="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-      <circle cx="11" cy="11" r="8" />
-      <path d="m21 21-4.3-4.3" />
-    </svg>
+    <Search class="w-3.5 h-3.5 text-fg-muted shrink-0" />
     <input
       bind:this={inputEl}
       bind:value={query}
       oninput={onInput}
       onkeydown={onKeydown}
-      placeholder="Search notes… (Ctrl+F)"
+      placeholder={$t('search.placeholder')}
       class="flex-1 bg-transparent text-sm outline-none placeholder:text-fg-muted"
     />
+    {#if isSearching}
+      <Loader2 class="w-3.5 h-3.5 text-fg-muted animate-spin shrink-0" />
+    {/if}
     {#if query}
-      <button onclick={clearSearch} class="text-fg-muted hover:text-fg text-xs">✕</button>
+      <button onclick={clearSearch} class="text-fg-muted hover:text-fg transition shrink-0" title={$t('search.clear')}>
+        <X class="w-3.5 h-3.5" />
+      </button>
     {/if}
   </div>
 
   {#if isSearching || results.length > 0}
-    <div bind:this={listEl} class="absolute left-0 right-0 top-full bg-bg border border-border rounded-b-lg shadow-lg z-50 max-h-64 overflow-y-auto">
-      {#if isSearching}
-        <div class="px-3 py-2 text-xs text-fg-muted">Searching…</div>
+    <div bind:this={listEl} class="absolute left-0 right-0 top-full bg-surface-1 border border-border rounded-b-xl shadow-lg z-50 max-h-64 overflow-y-auto animate-slide-down">
+      {#if isSearching && results.length === 0}
+        <div class="px-3 py-2 text-xs text-fg-muted flex items-center gap-1.5">
+          <Loader2 class="w-3 h-3 animate-spin" />
+          {$t('search.searching')}
+        </div>
       {:else if results.length === 0}
-        <div class="px-3 py-2 text-xs text-fg-muted">No results</div>
+        <div class="px-3 py-2 text-xs text-fg-muted">{$t('search.noResults')}</div>
       {:else}
         {#each results as r, i (r.id)}
           <button
             data-idx={i}
             onclick={() => selectResult(r)}
             onmouseenter={() => (selectedIndex = i)}
-            class="w-full text-left px-3 py-2 border-b border-border last:border-0 transition {selectedIndex === i ? 'bg-bg-subtle' : 'hover:bg-bg-subtle'}"
+            class="w-full text-left px-3 py-2 border-b border-border last:border-0 transition {selectedIndex === i ? 'bg-accent-soft' : 'hover:bg-bg-subtle'}"
           >
-            <div class="text-sm font-medium truncate">{r.title || 'Untitled'}</div>
+            <div class="text-sm font-medium truncate">{r.title || $t('notes.untitled')}</div>
             <div class="text-xs text-fg-muted truncate">{r.snippet}</div>
           </button>
         {/each}
