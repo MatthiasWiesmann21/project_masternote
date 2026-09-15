@@ -55,6 +55,13 @@
       saveTimer = null;
     }
     errorMsg = '';
+    // Reset all dialog states to prevent stale modals
+    showDeleteConfirm = false;
+    showArchiveConfirm = false;
+    showUnarchiveConfirm = false;
+    showCopyConfirm = false;
+    showRapportDialog = false;
+    showCalendarDialog = false;
   }
 
   export function newNote() {
@@ -70,6 +77,13 @@
       saveTimer = null;
     }
     errorMsg = '';
+    // Reset all dialog states to prevent stale modals
+    showDeleteConfirm = false;
+    showArchiveConfirm = false;
+    showUnarchiveConfirm = false;
+    showCopyConfirm = false;
+    showRapportDialog = false;
+    showCalendarDialog = false;
   }
 
   function scheduleAutosave() {
@@ -113,6 +127,7 @@
 
   async function handleDelete() {
     if (note) {
+      showDeleteConfirm = false;
       await removeNote(note.id);
       newNote();
     }

@@ -1,9 +1,19 @@
 <script lang="ts">
   import type { Note } from '$lib/api';
-  import { selectedNoteId, activeTagFilter, activeCategoryFilter, activeContactFilter, activeCoworkerFilter, dateFrom, dateTo, searchQuery, timeRangeSort, filteredNotes, showArchived, selectedNoteIds } from '$lib/stores/notes';
+  import { selectedNoteId, activeTagFilter, activeCategoryFilter, activeContactFilter, activeCoworkerFilter, dateFrom, dateTo, searchQuery, timeRangeSort, filteredNotes, showArchived, selectedNoteIds, loadNotes } from '$lib/stores/notes';
   import * as api from '$lib/api';
 
   let { notes } = $props<{ notes: Note[] }>();
+
+  async function unarchiveFromList(e: MouseEvent, n: Note) {
+    e.stopPropagation();
+    try {
+      await api.unarchiveNote(n.id);
+      await loadNotes();
+    } catch (err) {
+      console.error('Failed to unarchive:', err);
+    }
+  }
 
   let filtered = $derived.by(() => {
     let result: Note[] = notes;
@@ -147,6 +157,16 @@
               {n.title || 'Untitled'}
               {#if n.archived}
                 <span class="text-[10px] text-fg-muted ml-1">(archived)</span>
+                <span
+                  role="button"
+                  tabindex="0"
+                  onclick={(e) => unarchiveFromList(e, n)}
+                  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); unarchiveFromList(e as any, n); } }}
+                  class="text-[10px] text-accent hover:underline ml-1 cursor-pointer"
+                  title="Restore from archive"
+                >
+                  ↩ restore
+                </span>
               {/if}
             </span>
             <span class="text-[10px] text-fg-muted whitespace-nowrap mt-0.5">

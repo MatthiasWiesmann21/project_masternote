@@ -366,7 +366,8 @@
 <div class="flex flex-col h-screen bg-bg rounded-lg overflow-hidden border border-border shadow-2xl">
   <!-- Title bar / drag region -->
   <div data-tauri-drag-region class="flex items-center gap-2 px-3 py-1.5 bg-bg-subtle border-b border-border select-none">
-    <span data-tauri-drag-region class="text-xs font-semibold text-fg flex-1">📝 MasterNote</span>
+    <img src="/logo.png" alt="MasterNote" class="w-4 h-4 shrink-0" draggable="false" />
+    <span data-tauri-drag-region class="text-xs font-semibold text-fg flex-1">MasterNote</span>
     <button onclick={() => (showSidebar = !showSidebar)} class="text-fg-muted hover:text-fg text-xs px-1" title="Toggle sidebar">
       ☰
     </button>
